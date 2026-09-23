@@ -1,0 +1,1539 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Zemicon | Landing Cost Calculator</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <div class="logo">Z</div>
+    <div>
+      <div class="brand-name">ZEMICON</div>
+      <div class="brand-sub">ELECTRONICS</div>
+    </div>
+  </div>
+  <div class="title-wrap">
+    <h1>Landing Cost Calculator</h1>
+    <p>Pre-order landed-cost &amp; Bill of Entry (BOE) estimation for imported electronic components</p>
+  </div>
+  <div class="user-pill">Procurement Team</div>
+</header>
+
+<div class="layout">
+  <main class="content">
+    <div class="steps">
+      <span class="step active">1 <b>Supplier &amp; RFQ</b></span>
+      <span class="line"></span>
+      <span class="step">2 <b>Shipping &amp; DHL Freight</b></span>
+      <span class="line"></span>
+      <span class="step">3 <b>Customs Valuation</b></span>
+      <span class="line"></span>
+      <span class="step">4 <b>Customs BOE Duties</b></span>
+      <span class="line"></span>
+      <span class="step">5 <b>Landed Cost &amp; Quotation</b></span>
+    </div>
+
+    <div id="error" class="error hidden"></div>
+
+    <div class="main-grid">
+      <section class="forms">
+
+        <!-- Card 1: Supplier & Commercial Invoice (RFQ Line Items) -->
+        <div class="card">
+          <div class="card-head" style="display:flex; justify-content:space-between; align-items:center;">
+            <div style="display:flex; align-items:center; gap:10px;">
+              <span class="icon">▣</span>
+              <h2>1. Supplier &amp; Commercial Invoice (RFQ Line Items)</h2>
+            </div>
+            <span class="item-count-badge" id="partsSummaryBadge">1 Part (100 pcs)</span>
+          </div>
+
+          <div style="display:grid; grid-template-columns: 2fr 1fr; gap:14px; margin-bottom:14px;">
+            <label>Supplier (Shared for all parts) *
+              <select id="supplier">
+                {% for supplier in suppliers %}
+                <option>{{ supplier }}</option>
+                {% endfor %}
+              </select>
+              <small>Procurement vendor / component distributor</small>
+            </label>
+            <label>Invoice Billing Currency
+              <div class="readonly" style="display:flex; align-items:center; font-weight:700;">INR (₹) - Indian Rupee</div>
+              <small>Commercial invoice basis</small>
+            </label>
+          </div>
+
+          <div id="element14Notice" class="element14-banner" style="display:none;">
+            <span class="element14-tag">Element14 Domestic Order</span>
+            <span>Domestic Procurement Mode Active: <b>9% CGST + 9% SGST</b> applied directly on Commercial Invoice. International shipping charges, DHL air freight, insurance, and import IGST are exempt/not applicable.</span>
+          </div>
+
+          <!-- Multi-Part Line Items Table -->
+          <div class="parts-table-wrap">
+            <table class="parts-table">
+              <thead>
+                <tr>
+                  <th style="width: 36px; text-align: center;">#</th>
+                  <th>Part Number / MPN / Description</th>
+                  <th style="width: 170px;">Unit Price (₹) *</th>
+                  <th style="width: 130px;">Quantity *</th>
+                  <th style="width: 160px; text-align: right;">Line Total (₹)</th>
+                  <th style="width: 44px; text-align: center;">Action</th>
+                </tr>
+              </thead>
+              <tbody id="partsTbody">
+                <!-- Rendered dynamically via JavaScript -->
+              </tbody>
+            </table>
+          </div>
+
+          <div class="parts-footer">
+            <button type="button" id="btnAddPart" class="btn-add-part">
+              <span style="font-size: 15px; font-weight: 900;">+</span> Add Another Part
+            </button>
+            <div class="invoice-total-callout">
+              <span class="invoice-total-label">Total Commercial Invoice Value:</span>
+              <strong id="invoiceValueDisplay" class="invoice-total-val">₹10,000.00</strong>
+              <input type="hidden" id="invoiceValue" value="10,000.00 INR">
+            </div>
+          </div>
+        </div>
+
+        <!-- Card 2: Shipping & DHL Freight -->
+        <div class="card" id="cardShipping">
+          <div class="card-head"><span class="icon">▰</span><h2>2. Shipping &amp; DHL Freight</h2></div>
+          <div id="card2Element14Notice" class="element14-banner" style="display:none;">
+            <span class="element14-tag">Element14</span>
+            <span>Domestic order from Element14 India. International shipping and DHL freight are not applicable (₹0.00).</span>
+          </div>
+          <div id="shippingInputsWrap">
+          <p style="margin: 0 0 14px; font-size: 12px; color: #5a6b82;">
+            <b>Shipping Charges</b> (vendor / inland transport from RFQ) and <b>DHL Freight</b> (based on Gross Weight &amp; DHL Rate Card) are calculated separately and both added to Assessable Value.
+          </p>
+          <div class="grid four">
+            <label>Shipping Charges (₹)
+              <input id="shippingCharges" type="number" min="0" step="0.01" value="0.00">
+              <small>Vendor / inland shipping from RFQ</small>
+            </label>
+            <label>Gross Weight (KG) *
+              <div class="unit-input"><input id="weight" type="number" min="0" step="0.01" value="0.50"><span>KG</span></div>
+              <small id="weightSubtext">Physical weight (if 0 KG, freight is ₹0)</small>
+            </label>
+            <label>Country of Origin *
+              <select id="origin">
+                {% for country in countries %}
+                <option {% if country == "United States" or country == "USA" %}selected{% endif %}>{{ country }}</option>
+                {% endfor %}
+              </select>
+              <small>Maps to DHL import zone</small>
+            </label>
+            <label>DHL Zone
+              <div id="zone" class="readonly">Zone 8</div>
+              <small>Origin country rate zone</small>
+            </label>
+          </div>
+
+          <div style="margin-top: 14px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
+            <div>
+              <span style="font-size: 12px; font-weight: 750; color: #29374b;">DHL Air Freight Source:</span>
+              <div class="toggle-pill-group" style="margin-top: 0; margin-left: 8px;">
+                <button type="button" id="toggleDhl" class="toggle-pill active">DHL Express Rate Card</button>
+                <button type="button" id="toggleCustomFreight" class="toggle-pill">Custom Air Freight</button>
+              </div>
+            </div>
+            <div id="customFreightWrap" class="hidden" style="min-width: 220px;">
+              <label style="margin: 0;">Custom Air Freight (₹)
+                <input id="customFreightInput" type="number" min="0" step="0.01" value="0" style="margin-top: 4px; height: 36px;">
+              </label>
+            </div>
+          </div>
+
+          <div class="freight-panel">
+            <div>
+              <div class="muted" id="freightLabel">DHL Export Freight Charge</div>
+              <div id="freight" class="freight-value">₹2,660.00</div>
+              <small id="freightSub">Based on 0.50 KG Gross Weight • Rate Card 05-May-2026</small>
+            </div>
+            <div class="rate-badge">
+              <span>RATE CARD</span>
+              <b id="rateCardZone">Zone 8</b>
+            </div>
+          </div>
+
+          <div class="dhl-note">
+            <b>DHL calculation:</b> Country of Origin → DHL Zone → Gross Weight → Export Rate Card (Non-documents p.1).
+          </div>
+          </div>
+        </div>
+
+        <!-- Card 3: Insurance & Customs Valuation (Assessable Value) -->
+        <div class="card" id="cardValuation">
+          <div class="card-head"><span class="icon">⚖</span><h2 id="card3Title">3. Insurance &amp; Customs Valuation (Assessable Value)</h2></div>
+          <div id="card3Element14Notice" class="element14-banner" style="display:none;">
+            <span class="element14-tag">Element14</span>
+            <span>Customs assessable valuation &amp; import insurance are not applicable for Element14 domestic procurement.</span>
+          </div>
+          <div id="valuationInputsWrap">
+          <p style="margin: 0 0 14px; font-size: 12px; color: #5a6b82;">
+            Under Indian Customs Act Section 14, Customs Duty is levied on the <b>Assessable Value (CIF)</b>:
+            <b>Assessable Value = Commercial Invoice + Insurance + Shipping Charges + DHL Freight</b>.
+          </p>
+
+          <div class="grid four">
+            <div>
+              <label for="insuranceApplicable">Insurance Applicable? (Yes / No) *</label>
+              <select id="insuranceApplicable" style="height: 38px; font-weight: 700; color: var(--navy2); border: 1px solid #bfd3eb; border-radius: 7px; background: #fff; width: 100%; padding: 0 10px;">
+                <option value="yes" selected>Yes (Add 1.125% automatically)</option>
+                <option value="no">No (Not Applicable - ₹0.00)</option>
+              </select>
+              <div class="toggle-pill-group" style="margin-top: 6px;">
+                <button type="button" id="insYes" class="toggle-pill active">Yes (1.125%)</button>
+                <button type="button" id="insNo" class="toggle-pill">No (0%)</button>
+              </div>
+              <small id="insApplicableSub">Rule 10(2): 1.125% auto-added to Assessable Value, IGST &amp; CGST/SGST</small>
+            </div>
+            <label>Calculated Insurance (₹)
+              <input id="insuranceField" type="text" value="₹112.50" readonly>
+              <small id="insStatusText">1.125% on Commercial Invoice &bull; Added to IGST &amp; CGST/SGST</small>
+            </label>
+            <label>Shipping Charges Applied (₹)
+              <input id="shippingAppliedField" type="text" value="₹0.00" readonly>
+              <small>Vendor inland / RFQ shipping</small>
+            </label>
+            <label>DHL Freight Applied (₹)
+              <input id="freightAppliedField" type="text" value="₹2,660.00" readonly>
+              <small>International DHL air freight</small>
+            </label>
+          </div>
+
+          <!-- Assessable Value Showcase Banner -->
+          <div class="assessable-banner">
+            <div class="assessable-banner-header">
+              <div>
+                <div class="assessable-tag">Customs Assessable Value (CIF Tax Base)</div>
+                <div id="bannerAssessable" class="assessable-amount">₹12,772.50</div>
+              </div>
+              <div class="assessable-badge">BOE Duty Base</div>
+            </div>
+            <div class="assessable-formula-row">
+              <span class="formula-chip"><small>Invoice Value</small><b id="chipInvoice">₹10,000.00</b></span>
+              <span class="formula-op">+</span>
+              <span class="formula-chip"><small id="chipInsLabel">Insurance (1.125%)</small><b id="chipInsurance">₹112.50</b></span>
+              <span class="formula-op">+</span>
+              <span class="formula-chip"><small>Shipping Charges</small><b id="chipShipping">₹0.00</b></span>
+              <span class="formula-op">+</span>
+              <span class="formula-chip"><small>DHL Freight</small><b id="chipFreight">₹2,660.00</b></span>
+              <span class="formula-op">=</span>
+              <span class="formula-chip" style="background: rgba(255,255,255,.24);"><small>Assessable Value</small><b id="chipTotalAssessable">₹12,772.50</b></span>
+            </div>
+          </div>
+          </div>
+        </div>
+
+        <!-- Card 4: Customs Duty Assessment (Bill of Entry) -->
+        <div class="card" id="cardCustoms">
+          <div class="card-head"><span class="icon">%</span><h2 id="card4Title">4. Customs Duty Assessment (Bill of Entry / BOE)</h2></div>
+          <div id="card4Element14Notice" class="element14-banner" style="display:none;">
+            <span class="element14-tag">Element14</span>
+            <span>Domestic GST Mode: <b>9% Central GST (CGST) + 9% State GST (SGST)</b> calculated directly on the Commercial Invoice Value (Total 18% GST). Import duties and IGST are not applicable.</span>
+          </div>
+          <p style="margin: 0 0 12px; font-size: 12px; color: #5a6b82;">
+            BCD is calculated on the <b>Assessable Value</b>. Select or enter the applicable rate (0% to 50%).
+          </p>
+
+          <div>
+            <label>Select Basic Customs Duty (BCD Rate: 0% to 50%) *</label>
+            <div class="bcd-pills" id="bcdChips">
+              <button type="button" class="bcd-pill active" data-rate="0">0% (Exempt)</button>
+              <button type="button" class="bcd-pill" data-rate="5">5%</button>
+              <button type="button" class="bcd-pill" data-rate="7.5">7.5%</button>
+              <button type="button" class="bcd-pill" data-rate="10">10%</button>
+              <button type="button" class="bcd-pill" data-rate="15">15%</button>
+              <button type="button" class="bcd-pill" data-rate="20">20%</button>
+              <button type="button" class="bcd-pill" data-rate="25">25%</button>
+              <button type="button" class="bcd-pill" data-rate="35">35%</button>
+              <button type="button" class="bcd-pill" data-rate="50">50%</button>
+            </div>
+            <div style="margin-top: 10px; max-width: 260px;">
+              <label>Custom BCD Rate (%)
+                <input id="bcdRate" type="number" min="0" max="50" step="0.01" value="0">
+              </label>
+            </div>
+          </div>
+
+          <div class="grid three" style="margin-top: 16px;">
+            <label>BCD Amount (₹)
+              <input id="bcdAmountDisplay" type="text" value="₹0.00" readonly>
+              <small id="bcdRateSub">Assessable Value × 0%</small>
+            </label>
+            <label>SWS (10% of BCD)
+              <input id="swsAmountDisplay" type="text" value="₹0.00" readonly>
+              <small>Social Welfare Surcharge: 10% on BCD</small>
+            </label>
+            <label>Import GST / IGST (18%)
+              <input id="igstAmountDisplay" type="text" value="₹2,299.05" readonly>
+              <small id="igstFormulaSub">18% on (Assessable Value [incl. Insurance] + BCD + SWS)</small>
+            </label>
+          </div>
+
+          <!-- GST Statutory Split Panel (CGST 9% + SGST 9% on IGST) -->
+          <div class="gst-split-panel">
+            <div class="gst-split-header">
+              <div class="gst-split-title">GST Statutory Breakdown (9% CGST + 9% SGST on IGST)</div>
+              <span style="font-size: 11px; color: #4e6582; font-weight: 600;">Rate: 9% Central + 9% State calculated on IGST charges</span>
+            </div>
+            <div class="gst-split-grid">
+              <label style="margin: 0;">Central GST / CGST (9%)
+                <input id="cgstDisplay" type="text" value="₹206.92" readonly style="margin-top: 4px; height: 38px;">
+                <small id="cgstSub">9% on Import IGST charges (reflects Insurance)</small>
+              </label>
+              <label style="margin: 0;">State GST / SGST (9%)
+                <input id="sgstDisplay" type="text" value="₹206.92" readonly style="margin-top: 4px; height: 38px;">
+                <small id="sgstSub">9% on Import IGST charges (reflects Insurance)</small>
+              </label>
+              <div class="gst-total-badge">
+                <span>Total GST Value on IGST</span>
+                <strong id="totalGstBadge">₹413.83</strong>
+                <small style="color: #bad8fa; font-size: 9px; display: block; margin-top: 2px;">Added to Landing Price</small>
+              </div>
+            </div>
+          </div>
+
+          <div class="boe-callout">
+            <b>Bill of Entry (BOE) Statutory Formula:</b><br>
+            • <b>BCD</b> = Assessable Value × BCD Rate<br>
+            • <b>SWS</b> = 10% × BCD Amount<br>
+            • <b>Import IGST (18%)</b> = (Assessable Value + BCD + SWS) × 18%<br>
+            • <b>CGST (9%)</b> = Import IGST × 9%<br>
+            • <b>SGST (9%)</b> = Import IGST × 9%<br>
+            • <b>Total GST on IGST</b> = CGST + SGST (Added directly to Total Landed Cost)
+            <div class="boe-formula-math" id="boeMathExplanation">
+              Because BCD and SWS are both zero in this BOE: <br>
+              <b>Assessable Value = ₹12,772.50</b><br>
+              <b>Import IGST (18%) = ₹2,299.05</b><br>
+              <b>CGST (9% on IGST) = ₹206.92 | SGST (9% on IGST) = ₹206.92</b><br>
+              <b>Total GST Value = ₹413.83 &bull; Added directly to Landing Price</b>
+            </div>
+          </div>
+        </div>
+
+        <!-- Card 5: Clearance, Handling & Desired Margin -->
+        <div class="card">
+          <div class="card-head"><span class="icon">⚙</span><h2>5. Clearance, Handling &amp; Commercial Margin</h2></div>
+          <div class="grid four">
+            <label>Custom Clearance (₹)
+              <input id="clearance" type="number" min="0" value="2000">
+            </label>
+            <label>Handling Charges (₹)
+              <input id="handling" type="number" min="0" value="500">
+            </label>
+            <label>Other Charges (₹)
+              <input id="other" type="number" min="0" value="0">
+            </label>
+            <label>Desired Margin (%)
+              <input id="margin" type="number" min="0" value="25">
+              <small>Commercial profit markup</small>
+            </label>
+          </div>
+        </div>
+
+        <!-- Itemized Part-by-Part Landed Cost & Quotation Breakdown -->
+        <div class="card" id="itemizedCard">
+          <div class="card-head" style="display: flex; justify-content: space-between; align-items: center;">
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <span class="icon">▤</span>
+              <h2>Itemized Part-by-Part Landed Cost &amp; Quotation</h2>
+            </div>
+            <span class="item-count-badge" id="breakdownBadge">1 Part</span>
+          </div>
+          <p id="itemizedSubText" style="margin: 0 0 12px; font-size: 12px; color: #5a6b82;">
+            Individual landed cost to company and customer quotation per component, apportioned by customs valuation share.
+          </p>
+          <div class="breakdown-table-wrap">
+            <table class="breakdown-table">
+              <thead>
+                <tr>
+                  <th>Part / MPN</th>
+                  <th style="width: 80px; text-align: center;">Qty</th>
+                  <th style="width: 120px; text-align: right;">Unit Buy (INR)</th>
+                  <th style="width: 140px; text-align: right;">Unit Landed Cost</th>
+                  <th style="width: 140px; text-align: right;">Unit Selling Quote</th>
+                  <th style="width: 160px; text-align: right;">Line Total Quote</th>
+                </tr>
+              </thead>
+              <tbody id="itemizedTbody">
+                <!-- Dynamically populated -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <button id="calculate" class="calculate">Calculate Landing Cost</button>
+      </section>
+
+      <!-- Sidebar Summary -->
+      <aside class="summary card">
+        <div class="summary-head">
+          <h2 id="summaryTitle">Import Cost Architecture</h2>
+          <p><span id="summarySupplier">DigiKey</span></p>
+        </div>
+        <div class="summary-body">
+          <div class="summary-stage">
+            <div class="stage-title">1. COMMERCIAL INVOICE</div>
+            <div class="summary-row"><span>Commercial Invoice</span><b id="productValue">₹10,000.00</b></div>
+            <div class="summary-row"><span>Parts &amp; Quantity</span><b id="invoiceStage">1 Part (100 pcs)</b></div>
+          </div>
+
+          <div class="stage-arrow">↓</div>
+
+          <div class="summary-stage">
+            <div class="stage-title">2. CUSTOMS VALUATION (CIF)</div>
+            <div class="summary-row"><span>Gross Weight</span><b id="sGrossWeight">0.50 KG</b></div>
+            <div class="summary-row"><span>Shipping Charges (RFQ)</span><b id="sShippingCharges">₹0.00</b></div>
+            <div class="summary-row"><span>DHL Air Freight</span><b id="sFreight">₹0.00</b></div>
+            <div class="summary-row"><span id="sInsuranceLabel">Insurance (1.125%)</span><b id="insurance">₹0.00</b></div>
+            <div class="summary-row" style="background:#eaf2fb; padding:5px 8px; border-radius:5px; margin:4px 0;">
+              <span style="font-weight:800; color:var(--navy);">Assessable Value</span>
+              <b id="assessable" style="color:var(--navy); font-size:13px;">₹0.00</b>
+            </div>
+          </div>
+
+          <div class="stage-arrow">↓</div>
+
+          <div class="summary-stage">
+            <div class="stage-title" id="stage3Title">3. CUSTOMS ASSESSMENT (BOE)</div>
+            <div class="summary-row"><span id="bcdLabel">BCD (0%)</span><b id="bcd">₹0.00</b></div>
+            <div class="summary-row"><span id="swsLabel">SWS (10% on BCD)</span><b id="sws">₹0.00</b></div>
+            <div class="summary-row"><span id="igstLabel">Import IGST (18%)</span><b id="sIgst">₹2,299.05</b></div>
+            <div class="summary-row"><span id="sCgstLabel">CGST (9% on IGST)</span><b id="sCgst">₹206.92</b></div>
+            <div class="summary-row"><span id="sSgstLabel">SGST (9% on IGST)</span><b id="sSgst">₹206.92</b></div>
+            <div class="summary-row" style="background:#eaf2fb; padding:5px 8px; border-radius:5px; margin:4px 0;">
+              <span id="sTotalGstLabel" style="font-weight:750; color:var(--navy);">Total GST on IGST</span>
+              <b id="sTotalGst" style="color:var(--navy);">₹413.83</b>
+            </div>
+            <div class="summary-row"><span id="totalTaxDutyLabel">Total Customs Duty &amp; Tax</span><b id="totalImportDutyTax">₹2,712.88</b></div>
+          </div>
+
+          <div class="stage-arrow">↓</div>
+
+          <div class="summary-stage">
+            <div class="stage-title">4. CLEARANCE &amp; HANDLING</div>
+            <div class="summary-row"><span>Customs Clearance</span><b id="sClearance">₹0.00</b></div>
+            <div class="summary-row"><span>Handling Charges</span><b id="sHandling">₹0.00</b></div>
+            <div class="summary-row"><span>Other Charges</span><b id="sOther">₹0.00</b></div>
+            <div class="summary-row"><span>Clearance &amp; Handling Total</span><b id="importCost">₹0.00</b></div>
+          </div>
+
+          <div class="total-box">
+            <div>TOTAL LANDED COST TO COMPANY</div>
+            <strong id="landedCost">₹0.00</strong>
+            <div class="unit-price-pill" id="unitLandedCostPill">Per Unit: ₹0.00 / pc</div>
+          </div>
+
+          <div class="selling-box">
+            <div>Zemicon Commercial Margin</div>
+            <strong id="zemiconMargin">₹0.00</strong>
+            <small id="marginText">25% markup</small>
+          </div>
+
+          <div class="quotation-box">
+            <div>CUSTOMER QUOTATION (SELLING PRICE)</div>
+            <strong id="sellingPrice">₹0.00</strong>
+            <div class="unit-price-pill" id="unitSellingPricePill">Per Unit: ₹0.00 / pc</div>
+          </div>
+
+          <div class="button-row">
+            <button class="secondary" type="button" onclick="printBoeSheet()">🖨️ Print BOE Sheet</button>
+            <button class="primary" type="button" onclick="calculate()">Recalculate</button>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </main>
+</div>
+
+<!-- Printable BOE & Landed Cost Statement Modal / Document -->
+<div id="printPreviewModal">
+  <div class="print-modal-content">
+    <div class="print-modal-bar">
+      <h3><span>🖨️</span> Bill of Entry (BOE) Landing Cost Statement</h3>
+      <div class="print-modal-actions">
+        <button type="button" class="btn-print-now" onclick="window.print()">🖨️ Print / Save as PDF</button>
+        <button type="button" class="btn-close-print" onclick="closePrintModal()">✕ Close</button>
+      </div>
+    </div>
+    <div class="print-document-wrap" id="printBoeDocument">
+      <div class="boe-print-sheet">
+        <!-- Header -->
+        <div class="boe-print-header">
+          <div>
+            <div class="boe-company-title">ZEMICON ELECTRONICS PVT LTD</div>
+            <div class="boe-company-sub">Procurement Assessment, BOE Customs Duty &amp; Landed Cost Statement</div>
+          </div>
+          <div class="boe-doc-badge">
+            <span class="badge-tag" id="pDocTypeBadge">BOE ASSESSMENT</span>
+            <div class="doc-date" id="pDocDate">--</div>
+          </div>
+        </div>
+
+        <!-- Meta Grid -->
+        <div class="boe-meta-grid">
+          <div class="boe-meta-item">
+            <small>Supplier</small>
+            <b id="pSupplier">--</b>
+          </div>
+          <div class="boe-meta-item">
+            <small>Country / Origin</small>
+            <b id="pOrigin">--</b>
+          </div>
+          <div class="boe-meta-item">
+            <small>Gross Weight</small>
+            <b id="pGrossWeight">--</b>
+          </div>
+          <div class="boe-meta-item">
+            <small>Invoice Currency</small>
+            <b>INR (₹)</b>
+          </div>
+        </div>
+
+        <!-- Charges Summary Callout -->
+        <div class="boe-charges-summary" id="pChargesSummaryBox">
+          <div><b id="pChargesTitle">Applicable Charges &amp; Statutory Tax Breakdown</b></div>
+          <div class="boe-charges-list" id="pChargesList">
+            <!-- Dynamically populated chips -->
+          </div>
+        </div>
+
+        <!-- Itemized Part-by-Part Statement Table -->
+        <div class="boe-table-wrap">
+          <table class="boe-table">
+            <thead>
+              <tr>
+                <th style="width: 32px; text-align: center;">#</th>
+                <th style="text-align: left;">Part Number / MPN</th>
+                <th style="width: 105px;">Per-Unit Price</th>
+                <th style="width: 55px; text-align: center;">Qty</th>
+                <th style="width: 110px;">Invoice Value</th>
+                <th style="width: 115px;">Assessable Value</th>
+                <th style="width: 95px;">IGST</th>
+                <th style="width: 90px;">CGST</th>
+                <th style="width: 90px;">SGST</th>
+                <th style="width: 125px;">Applicable Charges</th>
+                <th style="width: 120px;">Landing Price</th>
+                <th style="width: 110px;">Unit Landed</th>
+              </tr>
+            </thead>
+            <tbody id="pTableBody">
+              <!-- Dynamically populated parts -->
+            </tbody>
+            <tfoot id="pTableFoot">
+              <!-- Dynamically populated totals -->
+            </tfoot>
+          </table>
+        </div>
+
+        <!-- Commercial Quotation Callout -->
+        <div class="boe-quotation-callout" id="pQuotationCallout">
+          <div>
+            <b>Zemicon Commercial Margin:</b> <span id="pMarginText">25% markup</span> (<span id="pMarginVal">₹0.00</span>)
+          </div>
+          <div style="font-size: 13px; font-weight: 800; color: #087443;">
+            Customer Quotation (Selling Price): <span id="pSellingPrice" style="font-size: 15px;">₹0.00</span> (<span id="pUnitSellingPrice">₹0.00 / pc</span>)
+          </div>
+        </div>
+
+        <!-- Footer & Signatures -->
+        <div class="boe-print-footer">
+          <div>
+            <b>Compliance:</b> Assessed under Indian Customs Valuation &amp; GST Statutory Provisions.<br>
+            <small style="color: #94a3b8;">Computer generated statement &bull; Zemicon Electronics Pvt Ltd</small>
+          </div>
+          <div class="boe-signatures">
+            <div class="sign-box">Prepared By (Procurement)</div>
+            <div class="sign-box">Authorized Signatory (Zemicon)</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+
+let isInsuranceApplicable = true;
+let useCustomFreight = false;
+
+let partsList = [
+  { id: 1, name: "Part #1", price: 100.00, qty: 100 }
+];
+let nextPartId = 2;
+let lastCalcResponse = null;
+
+function money(n) {
+  if (typeof n === "string") {
+    n = n.replace(/[^0-9.-]/g, "");
+  }
+  const num = Number(n || 0);
+  return new Intl.NumberFormat("en-IN", {
+    style: "currency", currency: "INR", minimumFractionDigits: 2
+  }).format(isNaN(num) ? 0 : num);
+}
+
+function escapeHtml(str) {
+  return String(str || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function renderPartsTable() {
+  const tbody = $("partsTbody");
+  tbody.innerHTML = "";
+  partsList.forEach((part, index) => {
+    const tr = document.createElement("tr");
+    tr.dataset.id = part.id;
+    tr.innerHTML = `
+      <td class="part-idx">${index + 1}</td>
+      <td>
+        <input type="text" class="part-name" value="${escapeHtml(part.name)}" placeholder="e.g. STM32F401 / Resistor" data-id="${part.id}">
+      </td>
+      <td>
+        <input type="number" class="part-price" min="0" step="0.01" value="${part.price}" placeholder="0.00" data-id="${part.id}">
+      </td>
+      <td>
+        <input type="number" class="part-qty" min="1" step="1" value="${part.qty}" placeholder="1" data-id="${part.id}">
+      </td>
+      <td style="text-align: right; font-weight: 800; color: var(--navy);" class="part-total">
+        ${money(part.price * part.qty)}
+      </td>
+      <td style="text-align: center;">
+        <button type="button" class="btn-del-part" data-id="${part.id}" title="Remove part" ${partsList.length <= 1 ? "disabled" : ""}>✕</button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  tbody.querySelectorAll(".part-name").forEach(inp => {
+    inp.addEventListener("input", (e) => {
+      const p = partsList.find(x => x.id === Number(e.target.dataset.id));
+      if (p) {
+        p.name = e.target.value;
+        liveUpdate();
+      }
+    });
+  });
+
+  tbody.querySelectorAll(".part-price").forEach(inp => {
+    inp.addEventListener("input", (e) => {
+      const p = partsList.find(x => x.id === Number(e.target.dataset.id));
+      if (p) {
+        p.price = Math.max(0, Number(e.target.value || 0));
+        const tr = e.target.closest("tr");
+        if (tr) tr.querySelector(".part-total").textContent = money(p.price * p.qty);
+        liveUpdate();
+        calculate();
+      }
+    });
+  });
+
+  tbody.querySelectorAll(".part-qty").forEach(inp => {
+    inp.addEventListener("input", (e) => {
+      const p = partsList.find(x => x.id === Number(e.target.dataset.id));
+      if (p) {
+        p.qty = Math.max(1, Number(e.target.value || 1));
+        const tr = e.target.closest("tr");
+        if (tr) tr.querySelector(".part-total").textContent = money(p.price * p.qty);
+        liveUpdate();
+        calculate();
+      }
+    });
+  });
+
+  tbody.querySelectorAll(".btn-del-part").forEach(btn => {
+    btn.addEventListener("click", (e) => {
+      if (partsList.length <= 1) return;
+      const id = Number(e.target.dataset.id);
+      partsList = partsList.filter(x => x.id !== id);
+      renderPartsTable();
+      liveUpdate();
+      calculate();
+    });
+  });
+}
+
+$("btnAddPart").addEventListener("click", () => {
+  partsList.push({
+    id: nextPartId++,
+    name: `Part #${partsList.length + 1}`,
+    price: 100.00,
+    qty: 50
+  });
+  renderPartsTable();
+  liveUpdate();
+  calculate();
+});
+
+function renderItemizedBreakdown(items) {
+  const tbody = $("itemizedTbody");
+  if (!tbody) return;
+  tbody.innerHTML = "";
+  if (!items || items.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="6" style="text-align: center; color: #888; padding: 16px;">No items entered</td></tr>`;
+    return;
+  }
+  items.forEach(it => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td><b>${escapeHtml(it.part_name || "Part")}</b></td>
+      <td style="text-align: center;">${it.quantity || 1}</td>
+      <td style="text-align: right;">${money(it.unit_price)}</td>
+      <td style="text-align: right; color: var(--navy); font-weight: 750;">${money(it.unit_landed_cost)}</td>
+      <td style="text-align: right; color: #087443; font-weight: 750;">${money(it.unit_selling_price)}</td>
+      <td style="text-align: right; font-weight: 900; color: var(--navy2);">${money(it.selling_price || (Number(it.unit_selling_price || 0) * Number(it.quantity || 1)))}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+function payload() {
+  const customFreightVal = Number($("customFreightInput").value || 0);
+  const wtVal = $("weight").value === "" ? 0 : Math.max(0, Number($("weight").value));
+  
+  const items = partsList.map(p => ({
+    part_name: p.name.trim() || "Part",
+    unit_price: Number(p.price || 0),
+    quantity: Number(p.qty || 1)
+  }));
+
+  return {
+    supplier: $("supplier").value,
+    currency: "INR",
+    items: items,
+    shipping_charges: Math.max(0, Number($("shippingCharges").value || 0)),
+    bcd_rate: Number($("bcdRate").value || 0),
+    origin: $("origin").value,
+    weight: wtVal,
+    insurance_applicable: isInsuranceApplicable,
+    use_custom_freight: useCustomFreight,
+    custom_freight: customFreightVal,
+    custom_clearance: Number($("clearance").value || 0),
+    handling: Number($("handling").value || 0),
+    other_charges: Number($("other").value || 0),
+    margin: Number($("margin").value || 0)
+  };
+}
+
+// Client-side live calculation for instantaneous feedback
+function liveUpdate() {
+  let totalInv = 0;
+  let totalQty = 0;
+  partsList.forEach(p => {
+    totalInv += p.price * p.qty;
+    totalQty += p.qty;
+  });
+  if (totalQty <= 0) totalQty = 1;
+
+  $("invoiceValue").value = money(totalInv) + " INR";
+  $("invoiceValueDisplay").textContent = money(totalInv);
+  $("productValue").textContent = money(totalInv);
+  const partsCountText = `${partsList.length} ${partsList.length === 1 ? 'Part' : 'Parts'} (${totalQty.toLocaleString('en-IN')} pcs)`;
+  $("invoiceStage").textContent = partsCountText;
+  $("partsSummaryBadge").textContent = partsCountText;
+  $("breakdownBadge").textContent = `${partsList.length} ${partsList.length === 1 ? 'Part' : 'Parts'}`;
+  $("chipInvoice").textContent = money(totalInv);
+
+  const isElement14 = $("supplier").value.trim().toLowerCase() === "element14";
+
+  if ($("element14Notice")) {
+    $("element14Notice").style.display = isElement14 ? "flex" : "none";
+  }
+  if ($("card2Element14Notice")) {
+    $("card2Element14Notice").style.display = isElement14 ? "flex" : "none";
+  }
+  if ($("card3Element14Notice")) {
+    $("card3Element14Notice").style.display = isElement14 ? "flex" : "none";
+  }
+  if ($("card4Element14Notice")) {
+    $("card4Element14Notice").style.display = isElement14 ? "flex" : "none";
+  }
+  if ($("shippingInputsWrap")) {
+    $("shippingInputsWrap").classList.toggle("supplier-dimmed", isElement14);
+  }
+  if ($("valuationInputsWrap")) {
+    $("valuationInputsWrap").classList.toggle("supplier-dimmed", isElement14);
+  }
+  if ($("bcdChips")) {
+    $("bcdChips").classList.toggle("supplier-dimmed", isElement14);
+  }
+  if ($("card4Title")) {
+    $("card4Title").textContent = isElement14 
+      ? "4. Tax Assessment (Element14 Domestic GST: 9% CGST + 9% SGST)" 
+      : "4. Customs Duty Assessment (Bill of Entry / BOE)";
+  }
+
+  let ins = 0;
+  let shippingVal = 0;
+  let freightVal = 0;
+  let assessable = totalInv;
+  let bcd = 0;
+  let sws = 0;
+  let igst = 0;
+  let cgst = 0;
+  let sgst = 0;
+  let totalGst = 0;
+  let totalDuty = 0;
+  let opCost = 0;
+  let landed = 0;
+
+  if (isElement14) {
+    // Element14 Domestic Vendor Order:
+    // No shipping charges, no DHL freight, no insurance, no import IGST.
+    // 9% CGST + 9% SGST calculated directly on Commercial Invoice Value.
+    ins = 0;
+    shippingVal = 0;
+    freightVal = 0;
+    assessable = totalInv;
+    bcd = 0;
+    sws = 0;
+    igst = 0;
+    cgst = totalInv * 0.09;
+    sgst = totalInv * 0.09;
+    totalGst = cgst + sgst;
+    totalDuty = totalGst;
+    opCost = 0;
+    landed = totalInv + totalGst;
+
+    $("freightAppliedField").value = "₹0.00";
+    $("chipFreight").textContent = "₹0.00";
+    $("sFreight").textContent = "₹0.00";
+    $("shippingAppliedField").value = "₹0.00";
+    $("chipShipping").textContent = "₹0.00";
+    $("sShippingCharges").textContent = "₹0.00";
+    $("insuranceField").value = "₹0.00";
+    $("chipInsurance").textContent = "₹0.00";
+    if ($("chipInsLabel")) $("chipInsLabel").textContent = "Insurance (N/A)";
+    $("insurance").textContent = "₹0.00";
+    if ($("sInsuranceLabel")) $("sInsuranceLabel").textContent = "Insurance (Exempt)";
+    $("insStatusText").textContent = "Not applicable for Element14 domestic procurement";
+
+    $("bannerAssessable").textContent = money(totalInv);
+    $("chipTotalAssessable").textContent = money(totalInv);
+    $("assessable").textContent = money(totalInv);
+
+    $("bcdAmountDisplay").value = "₹0.00";
+    $("bcdRateSub").textContent = "Exempt for Element14 Domestic";
+    $("bcd").textContent = "₹0.00";
+    $("bcdLabel").textContent = "BCD (Exempt)";
+
+    $("swsAmountDisplay").value = "₹0.00";
+    $("sws").textContent = "₹0.00";
+
+    $("igstAmountDisplay").value = "₹0.00";
+    if ($("sIgst")) $("sIgst").textContent = "₹0.00";
+    $("cgstDisplay").value = money(cgst);
+    $("sgstDisplay").value = money(sgst);
+    if ($("cgstSub")) $("cgstSub").textContent = "9% on Commercial Invoice (Element14 Domestic)";
+    if ($("sgstSub")) $("sgstSub").textContent = "9% on Commercial Invoice (Element14 Domestic)";
+    if ($("igstFormulaSub")) $("igstFormulaSub").textContent = "0% (Exempt / Not applicable for Element14)";
+    $("totalGstBadge").textContent = money(totalGst);
+
+    $("sCgst").textContent = money(cgst);
+    $("sSgst").textContent = money(sgst);
+    $("sTotalGst").textContent = money(totalGst);
+    $("totalImportDutyTax").textContent = money(totalDuty);
+
+    $("sClearance").textContent = "₹0.00";
+    $("sHandling").textContent = "₹0.00";
+    $("sOther").textContent = "₹0.00";
+    $("importCost").textContent = "₹0.00";
+
+    $("boeMathExplanation").innerHTML = `
+      <b>Element14 Domestic Order Tax Breakdown:</b><br>
+      • <b>Commercial Invoice Value:</b> ${money(totalInv)}<br>
+      • <b>Central GST / CGST (9% on Invoice):</b> ${money(cgst)}<br>
+      • <b>State GST / SGST (9% on Invoice):</b> ${money(sgst)}<br>
+      • <b>Total GST (18% on Invoice):</b> ${money(totalGst)} &bull; Added directly to Landing Price<br>
+      <i>(No International Shipping Charges, DHL Air Freight, Insurance, or Import IGST)</i>
+    `;
+  } else {
+    // Normal international import workflow for all other suppliers (unchanged!)
+    ins = isInsuranceApplicable ? (totalInv * 0.01125) : 0;
+    $("insuranceField").value = money(ins);
+    $("chipInsurance").textContent = money(ins);
+    if ($("chipInsLabel")) {
+      $("chipInsLabel").textContent = isInsuranceApplicable ? "Insurance (1.125%)" : "Insurance (No - 0%)";
+    }
+    $("insurance").textContent = money(ins);
+    if ($("sInsuranceLabel")) {
+      $("sInsuranceLabel").textContent = isInsuranceApplicable ? "Insurance (1.125%)" : "Insurance (No - 0%)";
+    }
+    $("insStatusText").textContent = isInsuranceApplicable 
+      ? "1.125% auto-calculated on Invoice • Added to IGST & CGST/SGST" 
+      : "Insurance: ₹0.00 (exempt / not added to IGST, CGST, SGST)";
+    if ($("insApplicableSub")) {
+      $("insApplicableSub").textContent = isInsuranceApplicable
+        ? "Rule 10(2): 1.125% auto-added to Assessable Value, IGST & CGST/SGST"
+        : "Insurance not applicable (0%) • Excluded from Assessable Value & GST";
+    }
+
+    const grossWt = $("weight").value === "" ? 0 : Math.max(0, Number($("weight").value));
+    $("sGrossWeight").textContent = grossWt.toFixed(2) + " KG";
+
+    shippingVal = Math.max(0, Number($("shippingCharges").value || 0));
+    $("shippingAppliedField").value = money(shippingVal);
+    $("chipShipping").textContent = money(shippingVal);
+    $("sShippingCharges").textContent = money(shippingVal);
+
+    if (grossWt <= 0) {
+      freightVal = 0;
+      $("freight").textContent = money(0);
+      $("freightSub").textContent = "Gross Weight is 0 KG • Freight is ₹0.00";
+    } else if (useCustomFreight) {
+      freightVal = Number($("customFreightInput").value || 0);
+      $("freight").textContent = money(freightVal);
+    } else {
+      const curFreightText = $("freight").textContent.replace(/[^0-9.]/g, "");
+      freightVal = Number(curFreightText || 0);
+    }
+
+    $("freightAppliedField").value = money(freightVal);
+    $("chipFreight").textContent = money(freightVal);
+    $("sFreight").textContent = money(freightVal);
+
+    assessable = totalInv + ins + shippingVal + freightVal;
+    $("bannerAssessable").textContent = money(assessable);
+    $("chipTotalAssessable").textContent = money(assessable);
+    $("assessable").textContent = money(assessable);
+
+    const bcdRate = Math.min(50, Math.max(0, Number($("bcdRate").value || 0)));
+    bcd = assessable * (bcdRate / 100);
+    sws = bcd * 0.10;
+    const igstBase = assessable + bcd + sws;
+    igst = igstBase * 0.18;
+    cgst = igst * 0.09;
+    sgst = igst * 0.09;
+    totalGst = cgst + sgst;
+    totalDuty = bcd + sws + igst + totalGst;
+
+    $("bcdAmountDisplay").value = money(bcd);
+    $("bcdRateSub").textContent = `Assessable Value × ${bcdRate}%`;
+    $("bcd").textContent = money(bcd);
+    $("bcdLabel").textContent = `BCD (${bcdRate}%)`;
+
+    $("swsAmountDisplay").value = money(sws);
+    $("sws").textContent = money(sws);
+
+    $("igstAmountDisplay").value = money(igst);
+    if ($("sIgst")) $("sIgst").textContent = money(igst);
+    $("cgstDisplay").value = money(cgst);
+    $("sgstDisplay").value = money(sgst);
+    if ($("cgstSub")) {
+      $("cgstSub").textContent = isInsuranceApplicable ? "9% on Import IGST charges (reflects Insurance)" : "9% on Import IGST charges (no insurance)";
+    }
+    if ($("sgstSub")) {
+      $("sgstSub").textContent = isInsuranceApplicable ? "9% on Import IGST charges (reflects Insurance)" : "9% on Import IGST charges (no insurance)";
+    }
+    if ($("igstFormulaSub")) {
+      $("igstFormulaSub").textContent = "18% on (Assessable Value [incl. Insurance] + BCD + SWS)";
+    }
+    $("totalGstBadge").textContent = money(totalGst);
+
+    $("sCgst").textContent = money(cgst);
+    $("sSgst").textContent = money(sgst);
+    $("sTotalGst").textContent = money(totalGst);
+    $("totalImportDutyTax").textContent = money(totalDuty);
+
+    const clearance = Number($("clearance").value || 0);
+    const handling = Number($("handling").value || 0);
+    const other = Number($("other").value || 0);
+
+    opCost = clearance + handling + other;
+    $("sClearance").textContent = money(clearance);
+    $("sHandling").textContent = money(handling);
+    $("sOther").textContent = money(other);
+    $("importCost").textContent = money(opCost);
+
+    landed = totalInv + totalDuty + shippingVal + freightVal + ins + opCost;
+
+    const insNote = isInsuranceApplicable 
+      ? `+ Insurance ${money(ins)} (1.125%)` 
+      : `+ Insurance ${money(0)} (No)`;
+    const igstInsNote = isInsuranceApplicable
+      ? `(reflects 1.125% insurance in duty base)`
+      : `(Insurance: No / 0%)`;
+
+    if (bcdRate === 0) {
+      $("boeMathExplanation").innerHTML = `
+        Because BCD and SWS are zero in this BOE: <br>
+        <b>Assessable Value = ${money(assessable)}</b> (Invoice ${money(totalInv)} ${insNote} + Shipping ${money(shippingVal)} + Freight ${money(freightVal)})<br>
+        <b>Import IGST (18%) = ${money(igst)}</b> ${igstInsNote}<br>
+        <b>CGST (9% on IGST) = ${money(cgst)} | SGST (9% on IGST) = ${money(sgst)}</b><br>
+        <b>Total GST Value = ${money(totalGst)} &bull; Added directly to Landing Price</b>
+      `;
+    } else {
+      $("boeMathExplanation").innerHTML = `
+        BCD (${bcdRate}%) = ${money(bcd)} | SWS (10%) = ${money(sws)}<br>
+        <b>GST Base = ${money(assessable)} + ${money(bcd)} + ${money(sws)} = ${money(igstBase)}</b> ${igstInsNote}<br>
+        <b>Import IGST (18%) = ${money(igst)}</b><br>
+        <b>CGST (9% on IGST) = ${money(cgst)} | SGST (9% on IGST) = ${money(sgst)}</b><br>
+        <b>Total GST Value = ${money(totalGst)} &bull; Added directly to Landing Price</b>
+      `;
+    }
+  }
+
+  const marginPct = Number($("margin") ? $("margin").value : 25) || 0;
+  const marginAmt = landed * (marginPct / 100);
+  const selling = landed + marginAmt;
+  const unitLanded = totalQty > 0 ? (landed / totalQty) : 0;
+  const unitSelling = totalQty > 0 ? (selling / totalQty) : 0;
+
+  $("landedCost").textContent = money(landed);
+  $("unitLandedCostPill").textContent = "Per Unit: " + money(unitLanded) + " / pc";
+  $("zemiconMargin").textContent = money(marginAmt);
+  $("sellingPrice").textContent = money(selling);
+  $("unitSellingPricePill").textContent = "Per Unit: " + money(unitSelling) + " / pc";
+  $("marginText").textContent = marginPct + "% markup";
+
+  if ($("summaryTitle")) {
+    $("summaryTitle").textContent = isElement14 ? "Domestic Cost Architecture" : "Import Cost Architecture";
+  }
+  if ($("summarySupplier")) {
+    $("summarySupplier").textContent = isElement14 ? "Element14 (Domestic India)" : $("supplier").value;
+  }
+  if ($("stage3Title")) {
+    $("stage3Title").textContent = isElement14 ? "3. DOMESTIC TAX (CGST + SGST)" : "3. CUSTOMS ASSESSMENT (BOE)";
+  }
+  if ($("sCgstLabel")) {
+    $("sCgstLabel").textContent = isElement14 ? "Central GST / CGST (9% on Invoice)" : "CGST (9% on IGST)";
+  }
+  if ($("sSgstLabel")) {
+    $("sSgstLabel").textContent = isElement14 ? "State GST / SGST (9% on Invoice)" : "SGST (9% on IGST)";
+  }
+  if ($("sTotalGstLabel")) {
+    $("sTotalGstLabel").textContent = isElement14 ? "Total GST (18% on Invoice)" : "Total GST on IGST";
+  }
+  if ($("totalTaxDutyLabel")) {
+    $("totalTaxDutyLabel").textContent = isElement14 ? "Total Domestic GST" : "Total Customs Duty & Tax";
+  }
+  if ($("itemizedSubText")) {
+    $("itemizedSubText").textContent = isElement14
+      ? "Individual landed cost to company (Buy Price + 9% CGST + 9% SGST) and customer quotation per component."
+      : "Individual landed cost to company and customer quotation per component, apportioned by customs valuation share.";
+  }
+
+  // Generate preview itemized breakdown
+  const previewItems = partsList.map(p => {
+    const lineTotal = p.price * p.qty;
+    const share = totalInv > 0 ? (lineTotal / totalInv) : (1 / partsList.length);
+    const itemLanded = landed * share;
+    const itemSelling = selling * share;
+    return {
+      part_name: p.name,
+      quantity: p.qty,
+      unit_price: p.price,
+      unit_landed_cost: p.qty > 0 ? (itemLanded / p.qty) : 0,
+      unit_selling_price: p.qty > 0 ? (itemSelling / p.qty) : 0,
+      selling_price: itemSelling
+    };
+  });
+  renderItemizedBreakdown(previewItems);
+}
+
+async function calculate() {
+  $("error").classList.add("hidden");
+
+  try {
+    const res = await fetch("/api/calculate", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(payload())
+    });
+    const data = await res.json();
+    if (!res.ok || !data.ok) throw new Error(data.error || "Calculation failed");
+
+    $("zone").textContent = "Zone " + data.zone;
+    $("rateCardZone").textContent = "Zone " + data.zone;
+    const grossWt = $("weight").value === "" ? 0 : Math.max(0, Number($("weight").value));
+    $("sGrossWeight").textContent = grossWt.toFixed(2) + " KG";
+
+    if (grossWt <= 0) {
+      $("freight").textContent = money(0);
+      $("freightLabel").textContent = "DHL Export Freight Charge";
+      $("freightSub").textContent = "Gross Weight is 0 KG • Freight is ₹0.00";
+    } else if (!useCustomFreight) {
+      $("freight").textContent = money(data.freight);
+      $("freightLabel").textContent = "DHL Export Freight Charge";
+      $("freightSub").textContent = `Based on ${grossWt.toFixed(2)} KG Gross Weight • Zone ${data.zone}`;
+    }
+
+    $("summarySupplier").textContent = $("supplier").value;
+    $("productValue").textContent = money(data.product_value_inr);
+    const totalQty = data.total_quantity || 1;
+    const partsCountText = `${partsList.length} ${partsList.length === 1 ? 'Part' : 'Parts'} (${totalQty.toLocaleString('en-IN')} pcs)`;
+    $("invoiceStage").textContent = partsCountText;
+    $("partsSummaryBadge").textContent = partsCountText;
+    $("breakdownBadge").textContent = `${partsList.length} ${partsList.length === 1 ? 'Part' : 'Parts'}`;
+    $("chipInvoice").textContent = money(data.product_value_inr);
+
+    $("insurance").textContent = money(data.insurance);
+    $("insuranceField").value = money(data.insurance);
+    $("chipInsurance").textContent = money(data.insurance);
+    if ($("chipInsLabel")) {
+      $("chipInsLabel").textContent = data.insurance_applicable ? "Insurance (1.125%)" : "Insurance (No - 0%)";
+    }
+    if ($("sInsuranceLabel")) {
+      $("sInsuranceLabel").textContent = data.insurance_applicable ? "Insurance (1.125%)" : "Insurance (No - 0%)";
+    }
+    if ($("insuranceApplicable")) {
+      $("insuranceApplicable").value = data.insurance_applicable ? "yes" : "no";
+    }
+    if ($("insYes") && $("insNo")) {
+      $("insYes").classList.toggle("active", data.insurance_applicable);
+      $("insNo").classList.toggle("active", !data.insurance_applicable);
+    }
+    $("insStatusText").textContent = data.insurance_applicable 
+      ? "1.125% auto-calculated on Invoice • Added to IGST & CGST/SGST" 
+      : "Insurance: ₹0.00 (exempt / not added to IGST, CGST, SGST)";
+
+    $("shippingAppliedField").value = money(data.shipping_charges);
+    $("chipShipping").textContent = money(data.shipping_charges);
+    $("sShippingCharges").textContent = money(data.shipping_charges);
+
+    const actualFreight = grossWt <= 0 ? 0 : data.freight;
+    $("freightAppliedField").value = money(actualFreight);
+    $("chipFreight").textContent = money(actualFreight);
+    $("sFreight").textContent = money(actualFreight);
+
+    $("assessable").textContent = money(data.assessable_base);
+    $("bannerAssessable").textContent = money(data.assessable_base);
+    $("chipTotalAssessable").textContent = money(data.assessable_base);
+
+    $("bcd").textContent = money(data.bcd);
+    $("bcdAmountDisplay").value = money(data.bcd);
+    const bcdRateVal = Number(data.bcd_rate);
+    $("bcdLabel").textContent = "BCD (" + bcdRateVal.toFixed(2).replace(/\.00$/, "") + "%)";
+    $("bcdRateSub").textContent = `Assessable Value × ${bcdRateVal}%`;
+
+    $("sws").textContent = money(data.sws);
+    $("swsAmountDisplay").value = money(data.sws);
+
+    $("igstAmountDisplay").value = money(data.igst);
+    if ($("sIgst")) $("sIgst").textContent = money(data.igst);
+    $("cgstDisplay").value = money(data.cgst);
+    $("sgstDisplay").value = money(data.sgst);
+    if ($("cgstSub")) {
+      $("cgstSub").textContent = data.insurance_applicable ? "9% on Import IGST charges (reflects Insurance)" : "9% on Import IGST charges (no insurance)";
+    }
+    if ($("sgstSub")) {
+      $("sgstSub").textContent = data.insurance_applicable ? "9% on Import IGST charges (reflects Insurance)" : "9% on Import IGST charges (no insurance)";
+    }
+    $("totalGstBadge").textContent = money(data.total_gst);
+
+    $("sCgst").textContent = money(data.cgst);
+    $("sSgst").textContent = money(data.sgst);
+    $("sTotalGst").textContent = money(data.total_gst);
+    $("totalImportDutyTax").textContent = money(data.total_import_duty_tax);
+
+    $("sClearance").textContent = money(data.custom_clearance);
+    $("sHandling").textContent = money(data.handling);
+    $("sOther").textContent = money(data.other_charges);
+    $("importCost").textContent = money(data.custom_clearance + data.handling + data.other_charges);
+
+    $("landedCost").textContent = money(data.landed_cost);
+    $("unitLandedCostPill").textContent = "Per Unit: " + money(data.unit_landed_cost) + " / pc";
+
+    $("zemiconMargin").textContent = money(data.zemicon_margin);
+    $("sellingPrice").textContent = money(data.selling_price);
+    $("unitSellingPricePill").textContent = "Per Unit: " + money(data.unit_selling_price) + " / pc";
+    $("marginText").textContent = $("margin").value + "% markup";
+
+    if (data.is_element14) {
+      if ($("summaryTitle")) $("summaryTitle").textContent = "Domestic Cost Architecture";
+      if ($("summarySupplier")) $("summarySupplier").textContent = "Element14 (Domestic India)";
+      if ($("stage3Title")) $("stage3Title").textContent = "3. DOMESTIC TAX (CGST + SGST)";
+      if ($("sCgstLabel")) $("sCgstLabel").textContent = "Central GST / CGST (9% on Invoice)";
+      if ($("sSgstLabel")) $("sSgstLabel").textContent = "State GST / SGST (9% on Invoice)";
+      if ($("sTotalGstLabel")) $("sTotalGstLabel").textContent = "Total GST (18% on Invoice)";
+      if ($("totalTaxDutyLabel")) $("totalTaxDutyLabel").textContent = "Total Domestic GST";
+      if ($("itemizedSubText")) $("itemizedSubText").textContent = "Individual landed cost to company (Buy Price + 9% CGST + 9% SGST) and customer quotation per component.";
+
+      if ($("element14Notice")) $("element14Notice").style.display = "flex";
+      if ($("card2Element14Notice")) $("card2Element14Notice").style.display = "flex";
+      if ($("card3Element14Notice")) $("card3Element14Notice").style.display = "flex";
+      if ($("card4Element14Notice")) $("card4Element14Notice").style.display = "flex";
+      if ($("shippingInputsWrap")) $("shippingInputsWrap").classList.add("supplier-dimmed");
+      if ($("valuationInputsWrap")) $("valuationInputsWrap").classList.add("supplier-dimmed");
+      if ($("bcdChips")) $("bcdChips").classList.add("supplier-dimmed");
+      if ($("card4Title")) $("card4Title").textContent = "4. Tax Assessment (Element14 Domestic GST: 9% CGST + 9% SGST)";
+      if ($("bcdLabel")) $("bcdLabel").textContent = "BCD (Exempt)";
+      if ($("sInsuranceLabel")) $("sInsuranceLabel").textContent = "Insurance (Exempt)";
+      if ($("cgstSub")) $("cgstSub").textContent = "9% on Commercial Invoice (Element14 Domestic)";
+      if ($("sgstSub")) $("sgstSub").textContent = "9% on Commercial Invoice (Element14 Domestic)";
+      if ($("igstFormulaSub")) $("igstFormulaSub").textContent = "0% (Exempt / Not applicable for Element14)";
+      
+      $("boeMathExplanation").innerHTML = `
+        <b>Element14 Domestic Order Tax Breakdown:</b><br>
+        • <b>Commercial Invoice Value:</b> ${money(data.product_value_inr)}<br>
+        • <b>Central GST / CGST (9% on Invoice):</b> ${money(data.cgst)}<br>
+        • <b>State GST / SGST (9% on Invoice):</b> ${money(data.sgst)}<br>
+        • <b>Total GST (18% on Invoice):</b> ${money(data.total_gst)} &bull; Added directly to Landing Price<br>
+        <i>(No International Shipping Charges, DHL Air Freight, Insurance, or Import IGST)</i>
+      `;
+    } else {
+      if ($("summaryTitle")) $("summaryTitle").textContent = "Import Cost Architecture";
+      if ($("summarySupplier")) $("summarySupplier").textContent = $("supplier").value;
+      if ($("stage3Title")) $("stage3Title").textContent = "3. CUSTOMS ASSESSMENT (BOE)";
+      if ($("sCgstLabel")) $("sCgstLabel").textContent = "CGST (9% on IGST)";
+      if ($("sSgstLabel")) $("sSgstLabel").textContent = "SGST (9% on IGST)";
+      if ($("sTotalGstLabel")) $("sTotalGstLabel").textContent = "Total GST on IGST";
+      if ($("totalTaxDutyLabel")) $("totalTaxDutyLabel").textContent = "Total Customs Duty & Tax";
+      if ($("itemizedSubText")) $("itemizedSubText").textContent = "Individual landed cost to company and customer quotation per component, apportioned by customs valuation share.";
+
+      if ($("element14Notice")) $("element14Notice").style.display = "none";
+      if ($("card2Element14Notice")) $("card2Element14Notice").style.display = "none";
+      if ($("card3Element14Notice")) $("card3Element14Notice").style.display = "none";
+      if ($("card4Element14Notice")) $("card4Element14Notice").style.display = "none";
+      if ($("shippingInputsWrap")) $("shippingInputsWrap").classList.remove("supplier-dimmed");
+      if ($("valuationInputsWrap")) $("valuationInputsWrap").classList.remove("supplier-dimmed");
+      if ($("bcdChips")) $("bcdChips").classList.remove("supplier-dimmed");
+      if ($("card4Title")) $("card4Title").textContent = "4. Customs Duty Assessment (Bill of Entry / BOE)";
+      if ($("bcdLabel")) $("bcdLabel").textContent = "BCD (" + Number(data.bcd_rate).toFixed(2).replace(/\.00$/, "") + "%)";
+      if ($("sInsuranceLabel")) $("sInsuranceLabel").textContent = data.insurance_applicable ? "Insurance (1.125%)" : "Insurance (No - 0%)";
+      if ($("cgstSub")) $("cgstSub").textContent = data.insurance_applicable ? "9% on Import IGST charges (reflects Insurance)" : "9% on Import IGST charges (no insurance)";
+      if ($("sgstSub")) $("sgstSub").textContent = data.insurance_applicable ? "9% on Import IGST charges (reflects Insurance)" : "9% on Import IGST charges (no insurance)";
+      if ($("igstFormulaSub")) $("igstFormulaSub").textContent = "18% on (Assessable Value [incl. Insurance] + BCD + SWS)";
+
+      const insNote = data.insurance_applicable 
+        ? `+ Insurance ${money(data.insurance)} (1.125%)` 
+        : `+ Insurance ${money(0)} (No)`;
+      const igstInsNote = data.insurance_applicable
+        ? `(reflects 1.125% insurance in duty base)`
+        : `(Insurance: No / 0%)`;
+
+      if (Number(data.bcd_rate) === 0) {
+        $("boeMathExplanation").innerHTML = `
+          Because BCD and SWS are zero in this BOE:<br>
+          <b>Assessable Value = ${money(data.assessable_base)}</b> (Invoice ${money(data.product_value_inr)} ${insNote} + Shipping ${money(data.shipping_charges)} + Freight ${money(actualFreight)})<br>
+          <b>Import IGST (18%) = ${money(data.igst)}</b> ${igstInsNote}<br>
+          <b>CGST (9% on IGST) = ${money(data.cgst)} | SGST (9% on IGST) = ${money(data.sgst)}</b><br>
+          <b>Total GST Value = ${money(data.total_gst)} &bull; Added directly to Landing Price</b>
+        `;
+      } else {
+        $("boeMathExplanation").innerHTML = `
+          BCD (${Number(data.bcd_rate)}%) = ${money(data.bcd)} | SWS (10%) = ${money(data.sws)}<br>
+          <b>GST Base = ${money(data.assessable_base)} + ${money(data.bcd)} + ${money(data.sws)} = ${money(data.igst_base)}</b> ${igstInsNote}<br>
+          <b>Import IGST (18%) = ${money(data.igst)}</b><br>
+          <b>CGST (9% on IGST) = ${money(data.cgst)} | SGST (9% on IGST) = ${money(data.sgst)}</b><br>
+          <b>Total GST Value = ${money(data.total_gst)} &bull; Added directly to Landing Price</b>
+        `;
+      }
+    }
+
+    lastCalcResponse = data;
+    if (data.items && data.items.length > 0) {
+      renderItemizedBreakdown(data.items);
+    }
+    renderPrintBoeDocument(data);
+  } catch (e) {
+    $("error").textContent = e.message;
+    $("error").classList.remove("hidden");
+  }
+}
+
+// BCD Chips handler
+document.querySelectorAll(".bcd-pill").forEach(pill => {
+  pill.addEventListener("click", () => {
+    document.querySelectorAll(".bcd-pill").forEach(p => p.classList.remove("active"));
+    pill.classList.add("active");
+    $("bcdRate").value = pill.dataset.rate;
+    liveUpdate();
+    calculate();
+  });
+});
+
+$("bcdRate").addEventListener("input", () => {
+  const currentVal = $("bcdRate").value;
+  document.querySelectorAll(".bcd-pill").forEach(p => {
+    p.classList.toggle("active", p.dataset.rate === currentVal);
+  });
+  liveUpdate();
+});
+
+// Insurance Toggle handlers
+function setInsuranceApplicable(applicable) {
+  isInsuranceApplicable = applicable;
+  if ($("insuranceApplicable")) {
+    $("insuranceApplicable").value = applicable ? "yes" : "no";
+  }
+  if ($("insYes") && $("insNo")) {
+    $("insYes").classList.toggle("active", applicable);
+    $("insNo").classList.toggle("active", !applicable);
+  }
+  liveUpdate();
+  calculate();
+}
+
+if ($("insuranceApplicable")) {
+  $("insuranceApplicable").addEventListener("change", (e) => {
+    setInsuranceApplicable(e.target.value === "yes");
+  });
+}
+if ($("insYes")) {
+  $("insYes").addEventListener("click", () => setInsuranceApplicable(true));
+}
+if ($("insNo")) {
+  $("insNo").addEventListener("click", () => setInsuranceApplicable(false));
+}
+
+// Freight Mode Handlers
+$("toggleDhl").addEventListener("click", () => {
+  useCustomFreight = false;
+  $("toggleDhl").classList.add("active");
+  $("toggleCustomFreight").classList.remove("active");
+  $("customFreightWrap").classList.add("hidden");
+  calculate();
+});
+
+$("toggleCustomFreight").addEventListener("click", () => {
+  useCustomFreight = true;
+  $("toggleCustomFreight").classList.add("active");
+  $("toggleDhl").classList.remove("active");
+  $("customFreightWrap").classList.remove("hidden");
+  const custVal = Number($("customFreightInput").value || 0);
+  $("freight").textContent = money(custVal);
+  $("freightLabel").textContent = "Custom RFQ Shipping Charge";
+  $("freightSub").textContent = "Entered directly from procurement RFQ";
+  liveUpdate();
+  calculate();
+});
+
+$("customFreightInput").addEventListener("input", () => {
+  if (useCustomFreight) {
+    const custVal = Number($("customFreightInput").value || 0);
+    $("freight").textContent = money(custVal);
+    liveUpdate();
+    calculate();
+  }
+});
+
+$("calculate").addEventListener("click", calculate);
+
+$("supplier").addEventListener("change", () => {
+  liveUpdate();
+  calculate();
+});
+
+["supplier", "shippingCharges", "origin", "weight", "clearance", "handling", "other", "margin"].forEach(id => {
+  $(id).addEventListener("input", () => {
+    liveUpdate();
+    if (id === "origin" || id === "weight" || id === "shippingCharges" || id === "supplier") {
+      calculate();
+    }
+  });
+});
+
+// Print BOE Sheet Handlers
+function closePrintModal() {
+  const modal = $("printPreviewModal");
+  if (modal) modal.classList.remove("active");
+}
+
+function renderPrintBoeDocument(data) {
+  if (!data) return;
+  const isElement14 = Boolean(data.is_element14);
+  const now = new Date();
+  
+  if ($("pDocDate")) {
+    $("pDocDate").textContent = now.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) + ' ' + 
+                                now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+  }
+  if ($("pSupplier")) {
+    $("pSupplier").textContent = isElement14 ? "Element14 (Domestic India)" : data.supplier;
+  }
+  if ($("pOrigin")) {
+    $("pOrigin").textContent = isElement14 ? "India (Domestic Delivery)" : $("origin").value;
+  }
+  const grossWt = $("weight").value === "" ? 0 : Math.max(0, Number($("weight").value));
+  if ($("pGrossWeight")) {
+    $("pGrossWeight").textContent = isElement14 ? "N/A (Domestic Delivery)" : (grossWt.toFixed(2) + " KG (Zone " + (data.zone || 1) + ")");
+  }
+  if ($("pDocTypeBadge")) {
+    $("pDocTypeBadge").textContent = isElement14 ? "DOMESTIC GST STATEMENT" : "IMPORT BOE ASSESSMENT";
+  }
+
+  // Charges Summary Box
+  const listEl = $("pChargesList");
+  if (listEl) {
+    listEl.innerHTML = "";
+    if (isElement14) {
+      if ($("pChargesTitle")) $("pChargesTitle").textContent = "Element14 Domestic Order - Applicable Tax & Delivery Summary";
+      const chips = [
+        `<b>Commercial Invoice:</b> ${money(data.product_value_inr)}`,
+        `<b>Central GST / CGST (9% on Invoice):</b> ${money(data.cgst)}`,
+        `<b>State GST / SGST (9% on Invoice):</b> ${money(data.sgst)}`,
+        `<b>Total GST (18% on Invoice):</b> ${money(data.total_gst)}`,
+        `<b>Shipping Charges:</b> Exempt (₹0.00)`,
+        `<b>DHL Air Freight:</b> Exempt (₹0.00)`,
+        `<b>Customs Duty / BCD / SWS:</b> Exempt (₹0.00)`,
+        `<b>Import IGST:</b> Exempt (₹0.00)`
+      ];
+      chips.forEach(c => {
+        const sp = document.createElement("span");
+        sp.className = "boe-charge-item";
+        sp.innerHTML = c;
+        listEl.appendChild(sp);
+      });
+    } else {
+      if ($("pChargesTitle")) $("pChargesTitle").textContent = "Applicable Import Charges & Customs Duty Breakdown";
+      const actualFreight = grossWt <= 0 ? 0 : data.freight;
+      const chips = [
+        `<b>Commercial Invoice:</b> ${money(data.product_value_inr)}`,
+        `<b>Shipping Charges (RFQ):</b> ${money(data.shipping_charges)}`,
+        `<b>DHL Air Freight:</b> ${money(actualFreight)}`,
+        `<b>Transit Insurance:</b> ${money(data.insurance)} ${data.insurance_applicable ? '(1.125%)' : '(0%)'}`,
+        `<b>Assessable Base (CIF):</b> ${money(data.assessable_base)}`,
+        `<b>BCD (${Number(data.bcd_rate)}%):</b> ${money(data.bcd)}`,
+        `<b>SWS (10% on BCD):</b> ${money(data.sws)}`,
+        `<b>Import IGST (18%):</b> ${money(data.igst)}`,
+        `<b>CGST (9% on IGST):</b> ${money(data.cgst)}`,
+        `<b>SGST (9% on IGST):</b> ${money(data.sgst)}`,
+        `<b>Total GST:</b> ${money(data.total_gst)}`
+      ];
+      if (data.import_cost > 0) {
+        chips.push(`<b>Clearance & Handling:</b> ${money(data.import_cost)}`);
+      }
+      const totalApplicable = (data.applicable_charges_total !== undefined)
+        ? Number(data.applicable_charges_total)
+        : (Number(data.shipping_charges || 0) + Number(actualFreight || 0) + Number(data.insurance || 0) + Number(data.bcd || 0) + Number(data.sws || 0) + Number(data.import_cost || 0));
+      chips.push(`<b style="color: var(--navy2);">Total Applicable Charges:</b> ${money(totalApplicable)}`);
+      
+      chips.forEach(c => {
+        const sp = document.createElement("span");
+        sp.className = "boe-charge-item";
+        sp.innerHTML = c;
+        listEl.appendChild(sp);
+      });
+    }
+  }
+
+  // Populate Table
+  const tbody = $("pTableBody");
+  if (tbody) {
+    tbody.innerHTML = "";
+    const items = data.items || [];
+    
+    let sumQty = 0;
+    let sumInv = 0;
+    let sumAssessable = 0;
+    let sumIgst = 0;
+    let sumCgst = 0;
+    let sumSgst = 0;
+    let sumAppCharges = 0;
+    let sumLanded = 0;
+
+    items.forEach((it, idx) => {
+      const qty = Number(it.quantity || 1);
+      const unitPrice = Number(it.unit_price || 0);
+      const lineInv = Number(it.invoice_value || it.line_total || (unitPrice * qty));
+      const assessable = Number(it.assessable_value || (isElement14 ? lineInv : 0));
+      const igst = Number(it.igst || 0);
+      const cgst = Number(it.cgst || (isElement14 ? (lineInv * 0.09) : 0));
+      const sgst = Number(it.sgst || (isElement14 ? (lineInv * 0.09) : 0));
+      const appCharges = Number(it.applicable_charges || 0);
+      const landed = Number(it.landed_cost || (lineInv + cgst + sgst + igst + appCharges));
+      const unitLanded = qty > 0 ? (landed / qty) : 0;
+
+      sumQty += qty;
+      sumInv += lineInv;
+      sumAssessable += assessable;
+      sumIgst += igst;
+      sumCgst += cgst;
+      sumSgst += sgst;
+      sumAppCharges += appCharges;
+      sumLanded += landed;
+
+      const tr = document.createElement("tr");
+      tr.innerHTML = `
+        <td style="text-align: center; font-weight: 700;">${idx + 1}</td>
+        <td style="text-align: left; font-weight: 750; color: var(--navy2);">${escapeHtml(it.part_name || "Part #" + (idx + 1))}</td>
+        <td>${money(unitPrice)}</td>
+        <td style="text-align: center; font-weight: 750;">${qty}</td>
+        <td>${money(lineInv)}</td>
+        <td>${money(assessable)}</td>
+        <td>${isElement14 ? '₹0.00' : money(igst)}</td>
+        <td>${money(cgst)}</td>
+        <td>${money(sgst)}</td>
+        <td>${isElement14 ? '₹0.00' : money(appCharges)}</td>
+        <td style="font-weight: 800; color: var(--navy);">${money(landed)}</td>
+        <td style="font-weight: 800; color: #087443;">${money(unitLanded)}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+
+    // Table Footer Totals
+    const tfoot = $("pTableFoot");
+    if (tfoot) {
+      const avgUnitLanded = sumQty > 0 ? (sumLanded / sumQty) : 0;
+      tfoot.innerHTML = `
+        <tr>
+          <td colspan="3" style="text-align: right; font-weight: 900; letter-spacing: 0.5px;">TOTAL ORDER / BOE SUMMARY</td>
+          <td style="text-align: center; font-weight: 900;">${sumQty.toLocaleString('en-IN')}</td>
+          <td style="font-weight: 900;">${money(sumInv)}</td>
+          <td style="font-weight: 900;">${money(sumAssessable)}</td>
+          <td style="font-weight: 900;">${isElement14 ? '₹0.00' : money(sumIgst)}</td>
+          <td style="font-weight: 900;">${money(sumCgst)}</td>
+          <td style="font-weight: 900;">${money(sumSgst)}</td>
+          <td style="font-weight: 900;">${isElement14 ? '₹0.00' : money(sumAppCharges)}</td>
+          <td style="font-weight: 900; font-size: 12px; color: var(--navy);">${money(sumLanded)}</td>
+          <td style="font-weight: 900; font-size: 12px; color: #087443;">${money(avgUnitLanded)}</td>
+        </tr>
+      `;
+    }
+  }
+
+  // Quotation Box
+  if ($("pMarginText")) $("pMarginText").textContent = ($("margin").value || 25) + "% markup";
+  if ($("pMarginVal")) $("pMarginVal").textContent = money(data.zemicon_margin);
+  if ($("pSellingPrice")) $("pSellingPrice").textContent = money(data.selling_price);
+  if ($("pUnitSellingPrice")) $("pUnitSellingPrice").textContent = money(data.unit_selling_price) + " / pc";
+}
+
+async function printBoeSheet() {
+  try {
+    await calculate();
+  } catch (err) {
+    console.error("Calculate before print:", err);
+  }
+  if (lastCalcResponse) {
+    renderPrintBoeDocument(lastCalcResponse);
+  }
+  const modal = $("printPreviewModal");
+  if (modal) modal.classList.add("active");
+  setTimeout(() => {
+    window.print();
+  }, 180);
+}
+
+// Close modal when clicking outside content
+window.addEventListener("click", (e) => {
+  const modal = $("printPreviewModal");
+  if (e.target === modal) {
+    closePrintModal();
+  }
+});
+
+// Close modal on Escape key
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    closePrintModal();
+  }
+});
+
+// Initial startup
+renderPartsTable();
+liveUpdate();
+calculate();
+</script>
+</body>
+</html>
