@@ -1,6 +1,5 @@
 """
-WSGI entrypoint for Gunicorn / Production deployment.
-Zemicon Landing Cost Calculator
+WSGI entry point for DigiKey Landing Price Automation.
 """
 from app import app
 

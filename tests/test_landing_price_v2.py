@@ -1,0 +1,471 @@
+import io
+import tempfile
+import unittest
+from pathlib import Path
+
+from flask import Flask
+from openpyxl import Workbook, load_workbook
+
+from app import app as application
+from services.landing_price_v2 import landing_v2
+from services.landing_price_v2.excel_import import inspect_upload
+
+
+def make_master_workbook(path):
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet["A4"] = "Manufacturer Part Number (MPN):"
+    sheet["A5"] = "Component Category:"
+    sheet["A6"] = "HSN / CTSH:"
+    sheet["A28"] = "Basic Customs Duty (BCD) Rate %:"
+    sheet["A30"] = "Social Welfare Surcharge (SWS) Rate %:"
+    for column, record in enumerate(
+        [
+            ("ABC123", "Semiconductor", "85423100", 0.1, 0.1),
+            ("PASSIVE1", "Passives", "85334090", 0, 0.1),
+        ],
+        2,
+    ):
+        for row, value in zip((4, 5, 6, 28, 30), record):
+            sheet.cell(row=row, column=column, value=value)
+    workbook.save(path)
+    workbook.close()
+
+
+class LandingPriceV2Tests(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        root = Path(self.temp_dir.name)
+        master_path = root / "master.xlsx"
+        make_master_workbook(master_path)
+        self.app = Flask(
+            __name__,
+            template_folder=str(Path(__file__).resolve().parents[1] / "templates"),
+            static_folder=str(Path(__file__).resolve().parents[1] / "static"),
+            instance_path=str(root / "instance"),
+        )
+        self.app.config.update(
+            TESTING=True,
+            LANDING_V2_DATABASE=str(root / "landing.sqlite"),
+            DIGIKEY_MASTER_FILE=str(master_path),
+        )
+        self.app.register_blueprint(landing_v2)
+        self.client = self.app.test_client()
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def calculate(self, items, **overrides):
+        payload = {
+            "items": items,
+            "remittance_applicable": "no",
+            "cha_applicable": "no",
+            "domestic_trucking_applicable": "no",
+            "igst_enabled": "no",
+            "margin_percent": 0,
+            **overrides,
+        }
+        return self.client.post("/api/landing/v2/calculate", json=payload)
+
+    def test_master_excel_seeds_lookup_with_percent_rates(self):
+        response = self.client.get("/api/landing/v2/product/ abc123 ")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.get_json(),
+            {
+                "found": True,
+                "mpn": "ABC123",
+                "category": "Semiconductor",
+                "hsn": "85423100",
+                "bcd": 10,
+                "sws": 10,
+                "source": "DigiKey Excel",
+            },
+        )
+
+    def test_freight_threshold_and_item_tariffs(self):
+        below = self.calculate(
+            [{"mpn": "ABC123", "quantity": 10, "unit_price": 600, "currency": "INR"}]
+        ).get_json()
+        self.assertEqual(below["totals"]["international_freight"], 1200)
+        self.assertEqual(below["items"][0]["insurance"], 67.5)
+        self.assertEqual(below["items"][0]["assessable_value"], 7267.5)
+        self.assertEqual(below["items"][0]["bcd_amount"], 727)
+        self.assertEqual(below["items"][0]["sws_amount"], 72.7)
+        self.assertEqual(below["items"][0]["base_landed_cost"], 8067.2)
+
+        threshold = self.calculate(
+            [{"mpn": "ABC123", "quantity": 10, "unit_price": 700, "currency": "INR"}]
+        ).get_json()
+        self.assertEqual(threshold["totals"]["international_freight"], 0)
+
+    def test_freight_uses_shipment_threshold_and_invoice_share_allocation(self):
+        result = self.calculate(
+            [
+                {"mpn": "ABC123", "quantity": 1, "unit_price": 8000, "currency": "INR"},
+                {"mpn": "PASSIVE1", "quantity": 1, "unit_price": 2000, "currency": "INR"},
+            ]
+        ).get_json()
+        self.assertEqual(result["totals"]["international_freight"], 0)
+
+        below_threshold = self.calculate(
+            [
+                {"mpn": "ABC123", "quantity": 1, "unit_price": 4000, "currency": "INR"},
+                {"mpn": "PASSIVE1", "quantity": 1, "unit_price": 2000, "currency": "INR"},
+            ]
+        ).get_json()
+        self.assertEqual(below_threshold["items"][0]["international_freight"], 800)
+        self.assertEqual(below_threshold["items"][1]["international_freight"], 400)
+        self.assertEqual(below_threshold["totals"]["international_freight"], 1200)
+
+    def test_shipment_charges_are_allocated_once_across_lines(self):
+        response = self.calculate(
+            [
+                {"mpn": "ABC123", "quantity": 1, "unit_price": 6000, "currency": "INR"},
+                {"mpn": "PASSIVE1", "quantity": 1, "unit_price": 4000, "currency": "INR"},
+            ],
+            remittance_applicable="yes",
+            cha_applicable="yes",
+            domestic_trucking_applicable="yes",
+        )
+        result = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(result["totals"]["total_shipment_charges"], 4712.5)
+        self.assertEqual(result["items"][0]["international_freight"], 0)
+        self.assertEqual(result["items"][1]["international_freight"], 0)
+        self.assertEqual(result["items"][0]["remittance"], 1800)
+        self.assertEqual(result["items"][1]["remittance"], 1200)
+        self.assertEqual(
+            sum(item["cha_port_dues"] for item in result["items"]),
+            1100,
+        )
+        self.assertEqual(
+            sum(item["domestic_trucking"] for item in result["items"]),
+            500,
+        )
+
+    def test_currency_conversion_applies_before_threshold(self):
+        response = self.calculate(
+            [{
+                "mpn": "PASSIVE1",
+                "quantity": 1,
+                "unit_price": 70,
+                "currency": "USD",
+                "live_exchange_rate": 100,
+            }]
+        )
+        result = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(result["items"][0]["live_exchange_rate_inr"], 100)
+        self.assertEqual(result["items"][0]["exchange_rate_inr"], 102)
+        self.assertEqual(result["items"][0]["line_invoice_currency"], 70)
+        self.assertEqual(result["items"][0]["line_invoice_inr"], 7140)
+        self.assertEqual(result["totals"]["total_invoice_inr"], 7140)
+        self.assertEqual(result["totals"]["international_freight"], 0)
+
+    def test_usd_live_rate_gets_two_percent_and_inr_does_not(self):
+        usd = self.calculate(
+            [{
+                "mpn": "PASSIVE1",
+                "quantity": 2,
+                "unit_price": 10,
+                "currency": "USD",
+                "live_exchange_rate": 80,
+            }]
+        ).get_json()["items"][0]
+        self.assertEqual(usd["exchange_rate_inr"], 81.6)
+        self.assertEqual(usd["unit_price_inr"], 816)
+        self.assertEqual(usd["line_invoice_currency"], 20)
+        self.assertEqual(usd["line_invoice_inr"], 1632)
+
+        inr = self.calculate(
+            [{"mpn": "PASSIVE1", "quantity": 2, "unit_price": 10, "currency": "INR"}]
+        ).get_json()["items"][0]
+        self.assertIsNone(inr["live_exchange_rate_inr"])
+        self.assertEqual(inr["exchange_rate_inr"], 1)
+        self.assertEqual(inr["unit_price_inr"], 10)
+        self.assertEqual(inr["line_invoice_currency"], 20)
+        self.assertEqual(inr["line_invoice_inr"], 20)
+
+    def test_usd_requires_live_interbank_rate(self):
+        response = self.calculate(
+            [{"mpn": "PASSIVE1", "quantity": 1, "unit_price": 10, "currency": "USD"}]
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("live interbank USD/INR", response.get_json()["error"])
+
+    def test_igst_is_optional_and_applied_after_margin(self):
+        item = [{"mpn": "PASSIVE1", "quantity": 1, "unit_price": 7000, "currency": "INR"}]
+        off = self.calculate(item).get_json()
+        self.assertFalse(off["totals"]["igst_enabled"])
+        self.assertNotIn("igst", off["items"][0])
+        self.assertEqual(off["items"][0]["margin_amount"], 0)
+        self.assertEqual(off["items"][0]["margin_inclusive_value"], 7078.75)
+
+        on = self.calculate(item, igst_enabled="yes", margin_percent=10).get_json()
+        self.assertEqual(on["items"][0]["base_landed_cost"], 7078.75)
+        self.assertEqual(on["items"][0]["margin_amount"], 707.88)
+        self.assertEqual(on["items"][0]["margin_inclusive_value"], 7786.63)
+        self.assertEqual(on["items"][0]["igst"], 1401.59)
+        self.assertEqual(on["items"][0]["final_price_including_igst"], 9188.22)
+
+    def test_margin_applies_to_landed_cost_and_each_line_without_igst(self):
+        result = self.calculate(
+            [
+                {"mpn": "ABC123", "quantity": 2, "unit_price": 1000, "currency": "INR"},
+                {"mpn": "PASSIVE1", "quantity": 1, "unit_price": 2000, "currency": "INR"},
+            ],
+            margin_percent=10,
+        ).get_json()
+
+        first, second = result["items"]
+        self.assertFalse(result["totals"]["igst_enabled"])
+        self.assertEqual(first["base_landed_cost"], 2910.7)
+        self.assertEqual(first["margin_amount"], 291.07)
+        self.assertEqual(first["margin_inclusive_value"], 3201.77)
+        self.assertEqual(first["per_unit_selling_price"], 1600.89)
+        self.assertEqual(second["base_landed_cost"], 2622.5)
+        self.assertEqual(second["margin_amount"], 262.25)
+        self.assertEqual(second["margin_inclusive_value"], 2884.75)
+        self.assertEqual(result["totals"]["base_landed_cost"], 5533.2)
+        self.assertEqual(result["totals"]["margin_amount"], 553.32)
+        self.assertEqual(result["totals"]["margin_inclusive_value"], 6086.52)
+
+    def test_missing_master_record_can_be_added_and_reused(self):
+        request_data = {
+            "items": [{"mpn": "NEW-1", "quantity": 1, "unit_price": 100, "currency": "INR"}]
+        }
+        missing = self.client.post("/api/landing/v2/calculate", json=request_data)
+        self.assertEqual(missing.status_code, 400)
+        self.assertIn("BCD rate", missing.get_json()["error"])
+
+        added = self.client.post(
+            "/api/landing/v2/master",
+            json={
+                "mpn": "NEW-1",
+                "category": "Semiconductor",
+                "hsn": "85423100",
+                "bcd": "0%",
+                "sws": "10%",
+            },
+        )
+        self.assertEqual(added.status_code, 200)
+        self.assertEqual(added.get_json()["created"], ["NEW-1"])
+        repeated = self.client.get("/api/landing/v2/product/new-1")
+        self.assertTrue(repeated.get_json()["found"])
+        self.assertEqual(self.client.post("/api/landing/v2/calculate", json=request_data).status_code, 200)
+
+    def test_unknown_mpn_can_calculate_with_entered_bcd_and_sws(self):
+        response = self.calculate(
+            [{
+                "mpn": "CUSTOM-1",
+                "quantity": 1,
+                "unit_price": 1000,
+                "currency": "INR",
+                "category": "Custom category",
+                "bcd_rate": 5,
+                "sws_rate": 10,
+            }]
+        )
+        result = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        item = result["items"][0]
+        self.assertEqual(item["category"], "Custom category")
+        self.assertEqual(item["insurance"], 11.25)
+        self.assertEqual(item["assessable_value"], 2211.25)
+        self.assertEqual(item["bcd_amount"], 111)
+        self.assertEqual(item["sws_amount"], 11.1)
+        self.assertEqual(item["base_landed_cost"], 2333.35)
+        self.assertFalse(self.client.get("/api/landing/v2/product/CUSTOM-1").get_json()["found"])
+
+    def test_other_charges_allocated_by_invoice_and_excluded_from_assessable_value(self):
+        result = self.calculate(
+            [
+                {"mpn": "ABC123", "quantity": 1, "unit_price": 6000, "currency": "INR"},
+                {"mpn": "PASSIVE1", "quantity": 1, "unit_price": 4000, "currency": "INR"},
+            ],
+            other_charges_total=1000,
+        ).get_json()
+        first, second = result["items"]
+        self.assertEqual(first["other_charges"], 600)
+        self.assertEqual(second["other_charges"], 400)
+        self.assertEqual(first["insurance"], 67.5)
+        self.assertEqual(second["insurance"], 45)
+        self.assertEqual(first["international_freight"], 0)
+        self.assertEqual(second["international_freight"], 0)
+        self.assertEqual(first["assessable_value"], 6067.5)
+        self.assertEqual(second["assessable_value"], 4045)
+        self.assertEqual(result["totals"]["insurance"], 112.5)
+        self.assertEqual(result["totals"]["other_charges"], 1000)
+        self.assertEqual(result["totals"]["total_shipment_charges"], 1112.5)
+        self.assertEqual(result["totals"]["assessable_value"], 10112.5)
+
+    def test_master_addition_does_not_overwrite_existing_tariff(self):
+        response = self.client.post(
+            "/api/landing/v2/master",
+            json={
+                "mpn": "ABC123",
+                "category": "Changed category",
+                "hsn": "85423100",
+                "bcd": 25,
+                "sws": 0,
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["already_present"], ["ABC123"])
+        product = self.client.get("/api/landing/v2/product/ABC123").get_json()
+        self.assertEqual(product["category"], "Semiconductor")
+        self.assertEqual(product["bcd"], 10)
+
+    def test_excel_import_endpoint_ignores_extended_price(self):
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.append(["Description", "MPN", "Qty", "Unit Price", "Total Price", "Notes"])
+        sheet.append(["Part", "ABC123", 4, 2.5, 10, "ignored"])
+        contents = io.BytesIO()
+        workbook.save(contents)
+        workbook.close()
+        contents.seek(0)
+        response = self.client.post(
+            "/api/landing/v2/import-excel",
+            data={"file": (contents, "purchase.xlsx")},
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(response.status_code, 200)
+        item = response.get_json()["items"][0]
+        self.assertEqual(item["mpn"], "ABC123")
+        self.assertEqual(item["unit_price"], 2.5)
+        self.assertEqual(item["quantity"], 4)
+        self.assertEqual(item["currency"], "USD")
+        self.assertTrue(item["master"]["found"])
+
+    def test_excel_import_rejects_currencies_other_than_usd_or_inr(self):
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.append(["MPN", "Unit Price", "Currency"])
+        sheet.append(["ABC123", 1.5, "EUR"])
+        contents = io.BytesIO()
+        workbook.save(contents)
+        workbook.close()
+        contents.seek(0)
+        response = self.client.post(
+            "/api/landing/v2/import-excel",
+            data={"file": (contents, "purchase.xlsx")},
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("USD or INR", response.get_json()["error"])
+
+    def test_excel_import_allows_manual_header_and_column_selection(self):
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.append(["Part Reference", "Per Item Cost", "Quantity"])
+        sheet.append(["ABC123", 2.5, 4])
+        contents = io.BytesIO()
+        workbook.save(contents)
+        workbook.close()
+
+        def upload(fields=None):
+            return self.client.post(
+                "/api/landing/v2/import-excel",
+                data={
+                    **(fields or {}),
+                    "default_currency": "USD",
+                    "file": (io.BytesIO(contents.getvalue()), "purchase.xlsx"),
+                },
+                content_type="multipart/form-data",
+            )
+
+        workbook_choice = upload()
+        self.assertTrue(workbook_choice.get_json()["needs_selection"])
+        selected_header = workbook_choice.get_json()["sheets"][0]
+        column_choice = upload(selected_header)
+        self.assertTrue(column_choice.get_json()["needs_selection"])
+        self.assertEqual(
+            [header["label"] for header in column_choice.get_json()["headers"]],
+            ["Part Reference", "Per Item Cost", "Quantity"],
+        )
+        imported = upload(
+            {
+                **selected_header,
+                "mpn_column": 0,
+                "unit_price_column": 1,
+                "quantity_column": 2,
+            }
+        )
+        self.assertEqual(imported.status_code, 200)
+        self.assertEqual(imported.get_json()["items"][0]["unit_price"], 2.5)
+        self.assertEqual(imported.get_json()["items"][0]["quantity"], 4)
+        self.assertEqual(imported.get_json()["items"][0]["currency"], "USD")
+
+    def test_v2_screen_and_master_export(self):
+        page = self.client.get("/landing/v2")
+        self.assertEqual(page.status_code, 200)
+        self.assertIn(b"Zemicon Landing Price Calculator", page.data)
+        self.assertIn(b'<option value="digikey" selected>DigiKey</option>', page.data)
+        self.assertIn(b'<option value="other">Other</option>', page.data)
+        self.assertIn(b'id="invoiceCurrency"', page.data)
+        self.assertIn(b'id="liveRate"', page.data)
+        self.assertNotIn(b'<th>Currency</th>', page.data)
+        self.assertNotIn(b'<th>Live interbank USD/INR rate</th>', page.data)
+        self.assertIn(b'<th>Amount (INR \xe2\x82\xb9)</th>', page.data)
+        self.assertIn(b'id="invoiceSummary"', page.data)
+        self.assertIn(b'id="tariffsSection"', page.data)
+        self.assertIn(b"BCD amount (INR)", page.data)
+        self.assertIn(b"SWS amount (INR)", page.data)
+        self.assertLess(
+            page.data.index(b'id="invoiceSummary"'),
+            page.data.index(b'id="tariffsSection"'),
+        )
+        exported = self.client.get("/api/landing/v2/master/export")
+        self.assertEqual(exported.status_code, 200)
+        self.assertEqual(
+            exported.mimetype,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        exported_workbook = load_workbook(io.BytesIO(exported.data), read_only=True)
+        self.assertEqual(
+            list(next(exported_workbook.active.iter_rows(values_only=True))),
+            ["MPN", "Category", "HSN / CTSH", "BCD (%)", "SWS (%)", "Source"],
+        )
+        exported_workbook.close()
+
+    def test_root_redirects_to_v2_and_legacy_endpoints_are_removed(self):
+        client = application.test_client()
+        root = client.get("/")
+        self.assertEqual(root.status_code, 302)
+        self.assertEqual(root.headers["Location"], "/landing/v2")
+        self.assertEqual(client.post("/api/calculate", json={}).status_code, 404)
+        self.assertEqual(client.get("/api/dhl/rate").status_code, 404)
+
+    def test_ambiguous_excel_columns_are_not_guessed(self):
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.append(["MPN", "Manufacturer Part Number", "Unit Price", "Price Per Unit", "Qty"])
+        sheet.append(["A", "A", 2.5, 2.5, 1])
+        contents = io.BytesIO()
+        workbook.save(contents)
+        workbook.close()
+        contents.seek(0)
+        result = inspect_upload(contents)
+        self.assertTrue(result["needs_selection"])
+        self.assertIn("unit_price", result["candidates"])
+
+        contents.seek(0)
+        imported = inspect_upload(
+            contents,
+            {
+                "sheet": "Sheet",
+                "header_row": 1,
+                "mpn_column": 0,
+                "unit_price_column": 2,
+                "quantity_column": 4,
+                "currency_column": "",
+            },
+        )
+        self.assertEqual(imported["items"][0]["mpn"], "A")
+        self.assertEqual(imported["items"][0]["unit_price"], 2.5)
+
+
+if __name__ == "__main__":
+    unittest.main()

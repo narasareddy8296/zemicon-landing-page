@@ -1,80 +1,118 @@
-# Zemicon Flask Landing Cost Calculator
+# Zemicon Landing Price Calculator
 
-## What this version is for
+A Flask application for estimating DigiKey component landing prices. It supports manual product entry, Excel purchase-list imports, DigiKey master tariff lookup, USD-to-INR conversion, shipment charges, customs duties, and per-line landed-cost results.
 
-This is the **pre-order** procurement calculator. There is deliberately no invoice upload.
+The legacy Landing Cost Calculator UI and its DHL freight/customs backend have been removed. The root URL (`/`) redirects to the maintained DigiKey calculator at `/landing/v2`.
 
-The procurement team enters:
-- Supplier: Element14, Mouser, UniKey, TTI, DigiKey, Waldom
-- Unit price
-- Quantity
-- User-entered BCD percentage
-- INR unit price and invoice value
-- Country of origin
-- Material/gross weight
-- Custom clearance
-- Handling
-- Other charges
-- Desired margin
+## Requirements
 
-The Flask backend calculates:
-1. Total invoice value = unit price × quantity
-2. Invoice value converted to INR using the exchange rate
-3. DHL zone from country of origin
-4. Chargeable weight
-5. DHL freight from the uploaded Zemicon DHL export rate card (PDF page 1)
-6. Insurance = 1.125% of the total invoice value
-7. Forex = not applicable because the calculator uses INR only
-8. Assessable value = invoice value + freight + insurance
-9. BCD = user-entered percentage of the assessable value
-10. Customs duty = BCD + SWS
-11. AIDC = applicable AIDC tax base × user-entered AIDC rate
-12. Import IGST = applicable IGST tax base × 18%
-13. Total import duty and tax = BCD + SWS + AIDC + Import IGST + other levies
-14. Subtotal = invoice value + customs assessment + import costs
-15. Custom clearance, handling and other charges
-16. Total landed cost
-17. Customer selling price using the current 25% markup interpretation
+- Python 3.10 or newer
+- Dependencies from `requirements.txt`
 
-## Run
+## Run locally
 
-```bash
-python -m venv venv
-venv\Scripts\activate
-pip install -r requirements.txt
+### Windows PowerShell
+
+```powershell
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
 python app.py
 ```
 
-Open:
-http://127.0.0.1:5000
+Open <http://127.0.0.1:5000>. The root URL redirects to the DigiKey calculator.
 
-## DHL rate card
+### Production
 
-The code includes the uploaded ZEMICON ELECTRONICS DHL EXPRESS WORLDWIDE EXPORT rate card, dated 05-May-2026 (PDF page 1):
-- country zones
-- 0.5–30 kg non-document rates
-- 30.1–70 kg multiplier
-- 70.1–300 kg multiplier
-- 300.1+ kg multiplier
+On Windows:
 
-The DHL card also states that each piece weight is rounded to the applicable 0.5 kg or 1 kg increment.
+```powershell
+waitress-serve --host=0.0.0.0 --port=5000 wsgi:app
+```
 
-## Important customs note
+On Linux/Unix:
 
-The customs/assessable-value formula is kept explicit in `app.py`. It should be validated against multiple BOEs before production. The provided BOE is a historical reference, not proof that every import has identical customs treatment.
+```bash
+gunicorn -c gunicorn.conf.py wsgi:app
+```
 
-For production, move the DHL rates and duty rules to database tables with a `rate_card_version` / `effective_date`.
+Use a reverse proxy and TLS for deployments beyond localhost.
 
+## Calculator workflow
 
-## Current rule clarification
+1. Select one invoice currency for the shipment. For USD, enter the live interbank USD/INR rate once; the calculator applies a 2% adjustment. INR uses an exchange rate of 1.
+2. Enter each component's MPN, quantity, and per-unit price. Each product row displays Amount = quantity × per-unit price, shown in INR (USD entries are converted using the adjusted exchange rate).
+3. The calculator computes insurance at 1.125% of each converted INR invoice amount.
+4. If total shipment invoice value is below ₹7,000, the ₹1,200 international freight charge is allocated by each line's share of the shipment invoice. Freight is zero at or above ₹7,000.
+5. Enter optional shipment-level Other charges in INR. These charges are allocated by invoice share and added to landed cost, but excluded from assessable value.
+6. Review the DigiKey tariff table. BCD is calculated on each line's assessable value (invoice + insurance + allocated international freight), rounded to the nearest whole rupee, then SWS is calculated on that rounded BCD. If an MPN is not in the master, enter its BCD/SWS rates for the calculation.
+7. Enter the team's margin percentage. The margin is applied to the landed cost of each line and added to the shipment selling total; the per-line selling price is shown separately. IGST remains optional and, when enabled, is calculated after margin.
 
-The requested rules are now implemented as:
-- Insurance = 1.125% × total invoice value.
-- Assessable value = invoice value + freight + insurance.
-- BCD = assessable value × user-entered BCD rate.
-- BCD rate = any percentage from 0% to 100%.
-- SWS = 10% × BCD amount.
-- AIDC = applicable AIDC tax base × AIDC rate.
-- Import IGST = applicable IGST tax base × IGST rate.
-- Customs duty = BCD + SWS.
-- Total import duty and tax = BCD + SWS + AIDC + Import IGST + other applicable levies.
+Remittance, CHA/port dues, and domestic trucking are optional configured shipment charges. For zero-value invoices, allocated optional charges use quantity shares.
+
+## DigiKey master and Excel import
+
+The initial master workbook is `static/digikey-1.xlsx`. On first use, the calculator imports its MPN, category, HSN/CTSH, BCD, and SWS data into the operational SQLite database. Rates stored in the workbook as fractions (such as `0.1`) are imported as percentages (`10%`). Existing master records are not overwritten when duplicates are added.
+
+The calculator accepts `.xlsx` purchase lists up to 10 MB. It searches for MPN, unit-price, and quantity columns and asks for a selection when the workbook's layout is ambiguous. Total/extended-price columns are not interpreted as unit prices; quantity defaults to 1 if missing. The shipment currency and USD exchange rate selected on the page apply to all imported rows.
+
+The operational DigiKey master can be downloaded using **Export DigiKey master**.
+
+## v2 HTTP endpoints
+
+| Method and path | Purpose |
+| --- | --- |
+| `GET /landing/v2` | DigiKey landing-price calculator. |
+| `GET /api/landing/v2/config` | List available currencies and active charge configuration. |
+| `GET /api/landing/v2/product/<mpn>` | Look up an MPN in the operational DigiKey master. |
+| `POST /api/landing/v2/import-excel` | Preview an uploaded `.xlsx` workbook; submit column selections when requested. |
+| `POST /api/landing/v2/calculate` | Calculate line landing prices using master data and shipment rules. |
+| `POST /api/landing/v2/master` | Add missing product tariff records; existing MPNs are unchanged. |
+| `GET /api/landing/v2/master/export` | Export the operational master as `.xlsx`. |
+
+The calculate request uses an `items` array with `mpn`, `quantity`, `unit_price`, and `currency` (`USD` or `INR`). For USD, provide `live_exchange_rate`; the backend applies the 2% adjustment. An unknown MPN requires `bcd_rate`; `sws_rate` defaults to 10% if omitted. Shipment-level Other charges use `other_charges_total` in INR. Optional request fields include `remittance_applicable`, `cha_applicable`, `domestic_trucking_applicable`, `margin_percent`, and `igst_enabled`. Margin is applied independently of IGST to each line's landed cost; the shipment selling total is the sum of those margin-inclusive lines. If enabled, IGST is calculated after margin.
+
+Example:
+
+```json
+{
+  "items": [
+    {
+      "mpn": "NCV5661DT33RKG",
+      "quantity": 12,
+      "unit_price": 1.193,
+      "currency": "USD",
+      "live_exchange_rate": 97.6854
+    }
+  ],
+  "remittance_applicable": "no",
+  "cha_applicable": "no",
+  "domestic_trucking_applicable": "no",
+  "other_charges_total": 250,
+  "igst_enabled": "no"
+}
+```
+
+The v2 API is intended for a trusted internal Procurement environment. Deploy it behind the organization's access controls before exposing the master-write endpoint.
+
+## Project layout
+
+| Path | Purpose |
+| --- | --- |
+| `app.py` | Flask application and root redirect to the DigiKey calculator. |
+| `wsgi.py` | WSGI entry point. |
+| `services/landing_price_v2/` | DigiKey master database, Excel import, API, and calculation engine. |
+| `templates/landing_price_v2.html` | DigiKey calculator UI. |
+| `static/landing_price_v2.js` | Product entry, live previews, and results UI. |
+| `static/landing_price_v2.css` | DigiKey calculator styles. |
+| `static/digikey-1.xlsx` | Source workbook used to seed the DigiKey master. |
+| `tests/test_landing_price_v2.py` | Calculator and API regression tests. |
+| `requirements.txt` | Python dependencies. |
+
+Treat calculator output as an estimate, not tax or customs advice. Validate duty assumptions against applicable customs requirements and representative Bills of Entry.
+
+Run tests from the repository root:
+
+```powershell
+python -m unittest discover -s tests -v
+```

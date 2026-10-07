@@ -1,5 +1,5 @@
 """
-Gunicorn configuration file for Zemicon Landing Cost Calculator.
+Gunicorn configuration for DigiKey Landing Price Automation.
 Usage:
     gunicorn -c gunicorn.conf.py wsgi:app
 """

@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Zemicon | Landing Price Calculator</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='landing_price_v2.css') }}">
+</head>
+<body>
+  <header class="v2-header">
+    <div>
+      <h1>Zemicon Landing Price Calculator</h1>
+      <p>Build a shipment from manual entries or an Excel purchase list.</p>
+    </div>
+  </header>
+
+  <main class="v2-main">
+    <section class="panel">
+      <div class="section-heading">
+        <div>
+          <h2>1. Add products</h2>
+          <p>Choose the invoice currency and exchange rate once for the full shipment. All product lines use the same settings.</p>
+        </div>
+        <div class="tabs" role="tablist" aria-label="Product input method">
+          <button class="tab active" id="manualTab" type="button" role="tab" aria-selected="true">Manual entry</button>
+          <button class="tab" id="excelTab" type="button" role="tab" aria-selected="false">Excel upload</button>
+        </div>
+      </div>
+
+      <div id="manualPanel">
+        <p class="helper">Amount is quantity × per-unit price, shown in INR. For USD, the calculator converts using the live interbank USD/INR rate plus 2%. INR prices need no exchange rate.</p>
+      </div>
+      <div id="excelPanel" class="hidden">
+        <label class="upload-label" for="excelFile">Purchase workbook (.xlsx)</label>
+        <input id="excelFile" type="file" accept=".xlsx">
+        <button id="inspectExcel" class="button" type="button">Inspect workbook</button>
+        <p class="helper">The preview imports MPN, unit price, and quantity. The selected shipment currency and exchange rate above apply to all imported lines. Quantity defaults to 1 only if there is no quantity column.</p>
+        <div id="columnChoices"></div>
+      </div>
+
+      <div class="price-settings">
+        <label for="vendor">Vendor
+          <select id="vendor">
+            <option value="digikey" selected>DigiKey</option>
+            <option value="other">Other</option>
+          </select>
+        </label>
+        <p id="vendorNotice" class="helper hidden" role="status" aria-live="polite">Other vendor selection is for display only; calculations currently use DigiKey tariff data.</p>
+        <label for="invoiceCurrency">Invoice currency (applies to all lines)
+          <select id="invoiceCurrency">
+            <option value="USD" selected>USD</option>
+            <option value="INR">INR</option>
+          </select>
+        </label>
+        <label id="liveRateWrap" for="liveRate">Live interbank USD/INR rate
+          <input id="liveRate" type="number" min="0.000001" step="any">
+          <small>Entered once for the shipment. The calculator adds 2% to this rate.</small>
+        </label>
+        <p id="inrRateNote" class="helper hidden">INR prices convert at 1:1; no exchange rate is needed.</p>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>MPN</th><th>Quantity</th><th>Amount (INR ₹)</th><th>Per unit price</th><th></th>
+            </tr>
+          </thead>
+          <tbody id="productRows"></tbody>
+        </table>
+      </div>
+      <button id="addLine" class="button button-secondary" type="button">Add product line</button>
+      <div id="invoiceSummary" class="invoice-summary" aria-live="polite"></div>
+    </section>
+
+    <section
+      id="assessableSection"
+      class="panel"
+      data-insurance-rate="1.125"
+      data-free-shipping-threshold="{{ charges['DIGIKEY_FREE_SHIPPING_THRESHOLD_INR'] }}"
+      data-international-freight="{{ charges['DIGIKEY_INTERNATIONAL_FREIGHT_INR'] }}"
+    >
+      <div class="section-heading">
+        <div>
+          <h2>2. Assessable value &amp; charges</h2>
+          <p>Insurance is 1.125% of invoice value. When total shipment invoice is below ₹7,000, each line’s freight is (line invoice ÷ total invoice) × ₹1,200. At or above ₹7,000, freight is zero. Assessable value is invoice + insurance + allocated freight; other charges are excluded from BCD assessment.</p>
+        </div>
+      </div>
+      <div class="assessment-summary" aria-live="polite">
+        <div class="assessment-card"><span>Invoice value (INR)</span><strong id="assessmentInvoice">—</strong></div>
+        <div class="assessment-card"><span>Insurance (1.125%)</span><strong id="assessmentInsurance">—</strong></div>
+        <div class="assessment-card"><span>International freight</span><strong id="assessmentFreight">—</strong></div>
+        <div class="assessment-card assessment-total"><span>Total assessable value</span><strong id="assessmentTotal">—</strong></div>
+      </div>
+      <label class="other-charges-field" for="otherChargesTotal">
+        Other charges (shipment total, INR)
+        <input id="otherChargesTotal" type="number" min="0" step="0.01" value="0">
+        <small>Allocated across MPN lines by each line’s share of invoice value. Added to landed cost, not assessable value.</small>
+      </label>
+    </section>
+
+    <section
+      id="tariffsSection"
+      class="panel"
+      data-free-shipping-threshold="{{ charges['DIGIKEY_FREE_SHIPPING_THRESHOLD_INR'] }}"
+      data-international-freight="{{ charges['DIGIKEY_INTERNATIONAL_FREIGHT_INR'] }}"
+    >
+      <div class="section-heading">
+        <div>
+          <h2>3. DigiKey master / tariffs</h2>
+          <p>Each MPN has its assessable value, BCD and SWS amounts together on the same row. BCD is rounded to the nearest whole rupee before SWS is calculated.</p>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>MPN</th><th>Master status</th><th>Component category</th>
+              <th>Invoice (INR)</th><th>Insurance 1.125% (INR)</th><th>Freight (INR)</th>
+              <th>Assessable value (INR)</th><th>BCD rate (%)</th><th>BCD amount (INR)</th>
+              <th>SWS rate (%)</th><th>SWS amount (INR)</th>
+            </tr>
+          </thead>
+          <tbody id="tariffRows"></tbody>
+        </table>
+      </div>
+      <p id="tariffEmpty" class="helper">Add product lines above to see DigiKey master and tariff details.</p>
+    </section>
+
+    <section class="panel">
+      <div class="section-heading">
+        <div>
+          <h2>4. Shipment charges</h2>
+          <p>Freight is (line invoice ÷ total invoice) × ₹1,200 only when total shipment invoice is below ₹7,000. Enabled remittance, CHA, domestic trucking, and other charges are allocated by INR invoice share. Other charges are entered in the assessable-value section.</p>
+        </div>
+      </div>
+      <div class="charge-cards">
+        <div><label for="remittance">Remittance charge?</label><select id="remittance"><option value="no" selected>No</option><option value="yes">Yes</option></select><strong>₹{{ charges["REMITTANCE_CHARGE_INR"] }}</strong></div>
+        <div><label for="cha">CHA &amp; port dues?</label><select id="cha"><option value="no" selected>No</option><option value="yes">Yes</option></select><strong>₹{{ charges["CHA_PORT_DUES_INR"] }}</strong></div>
+        <div><label for="domestic">Domestic trucking?</label><select id="domestic"><option value="no" selected>No</option><option value="yes">Yes</option></select><strong>₹{{ charges["DOMESTIC_TRUCKING_INR"] }}</strong></div>
+      </div>
+      <div class="tax-option">
+        <label id="markupWrap" for="markup">Margin on landing cost (%)<input id="markup" type="number" min="0" max="99.99" step="0.01" value="0"></label>
+        <label for="igstEnabled">Calculate IGST?</label>
+        <select id="igstEnabled"><option value="no" selected>No</option><option value="yes">Yes</option></select>
+        <p>Margin is applied to each line’s landed cost. Landing price per unit includes the margin and updates when you recalculate; at 0% margin it equals the landed cost per unit. IGST is optional and, when enabled, is calculated after margin.</p>
+      </div>
+      <button id="calculate" class="button" type="button">Calculate landing price</button>
+      <div id="error" class="error hidden" role="alert"></div>
+    </section>
+
+    <section id="results" class="panel hidden">
+      <div class="section-heading">
+        <div><h2>5. Landing price results</h2><p id="resultSummary"></p></div>
+      </div>
+      <div id="totals" class="totals"></div>
+      <div class="table-wrap results-table">
+        <table>
+          <thead id="resultHead"></thead>
+          <tbody id="resultRows"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+  <script src="{{ url_for('static', filename='landing_price_v2.js') }}" defer></script>
+</body>
+</html>
