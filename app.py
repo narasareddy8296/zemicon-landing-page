@@ -7,6 +7,16 @@ app = Flask(__name__)
 app.register_blueprint(landing_v2)
 
 
+@app.get("/health")
+def health_check():
+    return {"ok": True}, 200
+
+
+@app.before_request
+def log_request_start():
+    app.logger.info("Incoming request: %s %s", request.method, request.path)
+
+
 @app.get("/")
 def index():
     return redirect(url_for("landing_v2.calculator_page"))
