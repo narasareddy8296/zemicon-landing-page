@@ -24,6 +24,16 @@ Open <http://127.0.0.1:5000>. The root URL redirects to the DigiKey calculator.
 
 ### Production
 
+#### Render
+
+Create a **Web Service** for this repository with:
+
+- **Runtime:** Python
+- **Build command:** `pip install -r requirements.txt`
+- **Start command:** `gunicorn -c gunicorn.conf.py wsgi:app`
+
+Gunicorn binds to Render's `PORT` environment variable (and defaults to port 5000 locally). The service needs a persistent disk if you want the SQLite DigiKey master and added records to survive redeploys; otherwise Render's filesystem is ephemeral. Set `LANDING_V2_DATABASE` to a path on that disk, such as `/var/data/landing_price_v2.sqlite`, and mount the disk at `/var/data`.
+
 On Windows:
 
 ```powershell

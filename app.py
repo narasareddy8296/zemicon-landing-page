@@ -1,4 +1,4 @@
-from flask import Flask, redirect, url_for
+from flask import Flask, redirect, render_template, request, url_for
 
 from services.landing_price_v2.routes import landing_v2
 
@@ -10,6 +10,16 @@ app.register_blueprint(landing_v2)
 @app.get("/")
 def index():
     return redirect(url_for("landing_v2.calculator_page"))
+
+
+@app.get("/bad-gateway")
+def bad_gateway_page():
+    return render_template("error_502.html", request_id="a47297ee6f067fec-CMH")
+
+
+@app.errorhandler(502)
+def handle_bad_gateway(error):
+    return render_template("error_502.html", request_id="a47297ee6f067fec-CMH"), 502
 
 
 if __name__ == "__main__":

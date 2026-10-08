@@ -6,13 +6,14 @@ Usage:
 import multiprocessing
 import os
 
-# Server socket
-bind = os.getenv("GUNICORN_BIND", "0.0.0.0:5000")
+# Server socket. Render sets PORT for web services; keep 5000 as the local default.
+bind = os.getenv("GUNICORN_BIND", f"0.0.0.0:{os.getenv('PORT', '5000')}")
 backlog = 2048
 
 # Worker processes
 # Standard formula: (2 x $num_cores) + 1
-workers = int(os.getenv("GUNICORN_WORKERS", multiprocessing.cpu_count() * 2 + 1))
+# Small Render instances can be starved by CPU-count-based worker defaults.
+workers = int(os.getenv("GUNICORN_WORKERS", "2"))
 worker_class = "gthread"
 threads = int(os.getenv("GUNICORN_THREADS", 2))
 worker_connections = 1000

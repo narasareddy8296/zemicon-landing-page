@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>502 Bad Gateway</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='error_502.css') }}">
+  </head>
+  <body>
+    <main class="error-shell" aria-labelledby="error-title">
+      <div class="status-block" role="status" aria-live="polite">
+        <h1 id="error-title" class="error-code">502</h1>
+        <p class="error-label">Bad Gateway</p>
+        <p class="request-id">Request ID: {{ request_id }}</p>
+        <div class="error-copy">
+          <p>This service is currently unavailable. Please try again in a few minutes.</p>
+          <p>If you are the site owner, refer to <a href="https://render.com/docs" target="_blank" rel="noreferrer">Render's documentation</a> for troubleshooting.</p>
+        </div>
+      </div>
+
+      <footer class="powered-by" aria-label="Powered by Render">
+        <span>Powered by</span>
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span>Render</span>
+      </footer>
+    </main>
+  </body>
+</html>
