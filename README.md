@@ -31,6 +31,9 @@ Create a **Web Service** for this repository with:
 - **Runtime:** Python
 - **Build command:** `pip install -r requirements.txt`
 - **Start command:** `gunicorn -c gunicorn.conf.py wsgi:app`
+- **Health check path:** `/health`
+
+The repository pins the Render runtime to Python 3.12 in `.python-version` and includes `render.yaml` with these settings. Make sure the service is a **Web Service** using the Python runtime, not a Static Site; Flask must run under Gunicorn to serve the calculator page and its API. Render supplies `PORT` (10000 by default); the local fallback is 5000.
 
 Gunicorn binds to Render's `PORT` environment variable (and defaults to port 5000 locally). The service needs a persistent disk if you want the SQLite DigiKey master and added records to survive redeploys; otherwise Render's filesystem is ephemeral. Set `LANDING_V2_DATABASE` to a path on that disk, such as `/var/data/landing_price_v2.sqlite`, and mount the disk at `/var/data`.
 

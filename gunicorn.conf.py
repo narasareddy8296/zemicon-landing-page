@@ -6,7 +6,7 @@ Usage:
 import multiprocessing
 import os
 
-# Server socket. Render sets PORT for web services; keep 5000 as the local default.
+# Render supplies PORT (currently 10000 by default). Keep 5000 only for local runs.
 bind = os.getenv("GUNICORN_BIND", f"0.0.0.0:{os.getenv('PORT', '5000')}")
 backlog = 2048
 
