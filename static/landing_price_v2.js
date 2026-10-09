@@ -124,12 +124,12 @@ function renderLines() {
   state.lines.forEach((line, index) => {
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td data-label="MPN"><div class="mpn-search-row"><input class="mpn-input" data-field="mpn" aria-label="MPN" placeholder="Manufacturer part number" value="${escape(line.mpn || "")}"><button class="button button-secondary search-product" type="button" ${line.loading ? "disabled" : ""}>${line.loading ? '<span class="search-spinner" aria-hidden="true"></span> Searching' : "Search"}</button></div><small class="lookup-status" role="status" aria-live="polite">${escape(line.lookupMessage || "")}</small>${line.needsMatchSelection ? `<select class="match-choice" aria-label="Select DigiKey product"><option value="">Choose a DigiKey match</option>${line.productDetails.matches.map((match, choice) => `<option value="${choice}" ${String(line.selectedMatchIndex) === String(choice) ? "selected" : ""}>${escape(match.manufacturer_part_number || "Unknown MPN")} / ${escape(match.manufacturer || "Unknown manufacturer")} / ${escape(match.variations[0]?.digikey_product_number || "No DigiKey part number")}</option>`).join("")}</select>` : ""}${line.selectedProduct ? `<div class="live-product-details"><span class="live-product-label">DIGIKEY PRODUCT DETAILS</span><dl><div><dt>Manufacturer</dt><dd>${escape(line.selectedProduct.manufacturer || "Not provided")}</dd></div><div><dt>Category</dt><dd>${escape(line.master?.found ? line.master.category : "Not found in catalog")}</dd></div><div><dt>Description</dt><dd>${escape(line.selectedProduct.description || "Not provided")}</dd></div><div><dt>DigiKey part number</dt><dd>${escape(line.selectedVariation?.digikey_product_number || line.selectedProduct.digikey_part_number || "Not provided")}</dd></div></dl></div>` : ""}</td>
+      <td data-label="MPN"><div class="mpn-search-row"><input class="mpn-input" data-field="mpn" aria-label="MPN" placeholder="Manufacturer part number" value="${escape(line.mpn || "")}"><button class="button button-secondary search-product" type="button" ${line.loading ? "disabled" : ""}>${line.loading ? '<span class="search-spinner" aria-hidden="true"></span> Searching' : "Search"}</button></div><small class="lookup-status" role="status" aria-live="polite">${line.loading ? '<span class="status-spinner" aria-hidden="true"></span>' : ""}${escape(line.lookupMessage || "")}</small>${line.needsMatchSelection ? `<select class="match-choice" aria-label="Select DigiKey product"><option value="">Choose a DigiKey match</option>${line.productDetails.matches.map((match, choice) => `<option value="${choice}" ${String(line.selectedMatchIndex) === String(choice) ? "selected" : ""}>${escape(match.manufacturer_part_number || "Unknown MPN")} / ${escape(match.manufacturer || "Unknown manufacturer")} / ${escape(match.variations[0]?.digikey_product_number || "No DigiKey part number")}</option>`).join("")}</select>` : ""}${line.selectedProduct ? `<div class="live-product-details"><span class="live-product-label">DIGIKEY PRODUCT DETAILS</span><dl><div><dt>Manufacturer</dt><dd>${escape(line.selectedProduct.manufacturer || "Not provided")}</dd></div><div><dt>Category</dt><dd>${escape(line.selectedProduct.category || (line.master?.found ? line.master.category : "Not found in catalog"))}</dd></div><div><dt>Description</dt><dd>${escape(line.selectedProduct.description || "Not provided")}</dd></div></dl></div>` : ""}</td>
       <td data-label="Quantity"><input data-field="quantity" aria-label="Quantity" type="number" min="0.000001" step="any" value="${escape(line.quantity ?? 1)}"><small class="stock-warning" role="alert"></small></td>
       <td data-label="Amount (INR)" data-line-amount>â€”</td>
       <td data-label="Per unit price">
         <input data-field="unit_price" aria-label="Per unit price" type="number" min="0" step="any" value="${escape(line.unit_price ?? line.liveQuote?.unit_price ?? "")}">
-        ${line.liveQuote ? `<small class="live-price">${escape(line.selectedVariation.package_type)} / MOQ ${escape(line.selectedVariation.minimum_order_quantity || 1)} / DigiKey ${escape(line.liveQuote.digikey_product_number || "")} / tier ${escape(line.liveQuote.break_quantity)} / ${line.liveQuote.requested_quantity} x ${escape(money(line.liveQuote.unit_price, line.liveQuote.currency))} = ${escape(money(line.liveQuote.extended_price, line.liveQuote.currency))} / stock ${line.liveQuote.available_quantity == null ? "unavailable" : escape(line.liveQuote.available_quantity)} / ${line.quoteCached ? "cached" : "live"} from ${escape(line.fetchedAt || "")}${line.priceSource === "digikey" ? " / Auto-filled; editable" : ""}</small>` : line.pricingMessage ? `<small class="price-unavailable">${escape(line.pricingMessage)}</small>` : ""}
+        ${line.liveQuote ? `<small class="live-price">${escape(line.selectedVariation?.package_type || "Package")} / MOQ ${escape(line.selectedVariation?.minimum_order_quantity || 1)} / DigiKey ${escape(line.liveQuote.digikey_product_number || "")} / tier ${escape(line.liveQuote.break_quantity)} / ${line.liveQuote.requested_quantity} x ${escape(money(line.liveQuote.unit_price, line.liveQuote.currency))} = ${escape(money(line.liveQuote.extended_price, line.liveQuote.currency))} / stock ${line.liveQuote.available_quantity == null ? "unavailable" : escape(line.liveQuote.available_quantity)} / ${line.quoteCached ? "cached" : "live"} from ${escape(line.fetchedAt || "")}${line.preserveImportedPrice ? ` / BOM price ${escape(money(line.uploadPrice, line.currency))}` : line.priceSource === "digikey" ? " / Auto-filled; editable" : ""}</small>` : line.pricingMessage ? `<small class="price-unavailable">${escape(line.pricingMessage)}</small>` : ""}
         ${line.priceCurrencyMismatch ? `<small class="price-unavailable">Live price is ${escape(line.priceCurrencyMismatch.liveCurrency)}. Shipment uses ${escape(line.priceCurrencyMismatch.shipmentCurrency)}.</small>` : ""}
         <small data-conversion-preview></small>
       </td>
@@ -213,6 +213,64 @@ function updatePriceSettings() {
   $("results").classList.add("hidden");
   updateInvoiceSummary();
   updateTariffAmounts();
+  if (state.upload) {
+    refreshUploadedPricesForCurrency().catch((error) => showError(error.message));
+  }
+}
+
+async function refreshUploadedPricesForCurrency() {
+  const currency = $("invoiceCurrency").value;
+  const pending = state.lines.filter((line) => line.mpn?.trim() &&
+    (line.productDetails?.query_currency !== currency ||
+      (!line.liveQuote && !line.priceLookupError)));
+  if (!pending.length) return;
+  pending.forEach((line) => {
+    line.loading = true;
+    line.lookupMessage = `Updating DigiKey price in ${currency}...`;
+  });
+  renderLines();
+  await Promise.all(pending.map(async (line) => {
+    const mpn = line.mpn.trim();
+    try {
+      const response = await fetch(`/api/landing/v2/digikey-product/${encodeURIComponent(mpn)}?currency=${encodeURIComponent(currency)}`);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || `Could not load ${currency} price for ${mpn}.`);
+      line.productDetails = data.found ? data : { matches: [], error: data.error };
+      line.productDetails.queried_mpn = mpn;
+      line.productDetails.query_currency = currency;
+      const matches = line.productDetails.matches || [];
+      const exact = matches.map((match, index) => ({ match, index }))
+        .filter(({ match }) => match.exact_mpn_match);
+      line.selectedMatchIndex = exact.length === 1 ? exact[0].index : matches.length === 1 ? 0 : null;
+      updateSelectedMatch(line);
+      line.priceLookupError = !matches.length;
+      line.quoteCached = false;
+      line.fetchedAt = matches.length ? new Date().toLocaleTimeString() : "";
+      if (line.selectedProduct) {
+        line.lookupMessage = "Live DigiKey price updated for invoice currency.";
+        applyDigiKeyTier(line, true);
+        if (line.liveQuote?.currency === currency) {
+          line.unit_price = String(line.liveQuote.unit_price);
+          line.priceSource = "digikey";
+          line.currency = currency;
+        }
+      } else {
+        line.liveQuote = null;
+        line.pricingMessage = "Price unavailable in the selected currency.";
+        line.lookupMessage = line.productDetails?.error || `No DigiKey pricing found in ${currency}.`;
+      }
+    } catch (error) {
+      line.priceLookupError = true;
+      line.lookupMessage = error.message;
+    } finally {
+      line.loading = false;
+    }
+  }));
+  if ($("invoiceCurrency").value !== currency) {
+    await refreshUploadedPricesForCurrency();
+    return;
+  }
+  renderLines();
 }
 
 function lineInvoiceInr(line) {
@@ -529,6 +587,19 @@ function applyDigiKeyTier(line, allowReplace = false) {
     currency: tier.currency,
     available_quantity: variation.available_quantity,
   };
+  if (line.preserveImportedPrice) {
+    line.uploadPrice = line.uploadPrice ?? line.unit_price;
+    if (tier.currency === line.currency) {
+      line.unit_price = String(tier.unit_price);
+      line.priceSource = "digikey";
+    } else {
+      line.priceCurrencyMismatch = { liveCurrency: tier.currency, shipmentCurrency: line.currency };
+    }
+    line.priceCurrencyMismatch = tier.currency !== line.currency
+      ? { liveCurrency: tier.currency, shipmentCurrency: line.currency }
+      : null;
+    return;
+  }
 }
 
 async function lookupProduct(index) {
@@ -691,28 +762,58 @@ async function sendWorkbookImport(selection = {}) {
   }
   const form = new FormData();
   form.append("file", file);
-  form.append("default_currency", "USD");
+  form.append("default_currency", $("invoiceCurrency").value);
   Object.entries(selection).forEach(([key, value]) => form.append(key, value));
+  const uploadDetails = $("uploadDetails");
+  uploadDetails.innerHTML = '<span class="status-spinner" aria-hidden="true"></span> Reading BOM and fetching live product prices...';
+  uploadDetails.classList.remove("hidden");
   try {
     const response = await fetch("/api/landing/v2/import-excel", { method: "POST", body: form });
     const data = await response.json();
     if (!response.ok || !data.ok) throw new Error(data.error || "Workbook import failed.");
     if (data.needs_selection) {
+      uploadDetails.textContent = "Choose the BOM worksheet and columns to continue.";
       selectedColumnForm(data);
       return;
     }
     state.upload = data;
-    state.lines = data.items.map((item) => newLine({
-      ...item,
-      master: item.master,
-      live_exchange_rate: ""
-    }));
+    state.lines = data.items.map((item) => {
+      const line = newLine({
+        ...item,
+        master: item.master,
+        uploadPrice: item.unit_price,
+        live_exchange_rate: "",
+        productDetails: item.product_details || null,
+        liveQuote: item.live_quote || null,
+        preserveImportedPrice: true,
+        priceSource: item.live_quote?.currency === $("invoiceCurrency").value ? "digikey" : "upload",
+        quoteCached: false,
+        fetchedAt: item.product_details?.matches?.length ? new Date().toLocaleTimeString() : "",
+      });
+      const matches = line.productDetails?.matches || [];
+      const exact = matches.map((match, matchIndex) => ({ match, matchIndex }))
+        .filter(({ match }) => match.exact_mpn_match);
+      if (exact.length === 1) line.selectedMatchIndex = exact[0].matchIndex;
+      else if (matches.length === 1) line.selectedMatchIndex = 0;
+      updateSelectedMatch(line);
+      if (line.liveQuote && line.liveQuote.currency === $("invoiceCurrency").value) {
+        line.unit_price = String(line.liveQuote.unit_price);
+        line.priceSource = "digikey";
+        line.currency = $("invoiceCurrency").value;
+      }
+      line.lookupMessage = matches.length
+        ? "Live DigiKey details and quantity pricing loaded automatically."
+        : (line.productDetails?.error || "Live DigiKey details unavailable; BOM price retained.");
+      return line;
+    });
     $("columnChoices").replaceChildren();
     $("manualPanel").classList.add("hidden");
     $("excelPanel").classList.remove("hidden");
     renderLines();
+    uploadDetails.textContent = `Imported ${data.items.length} BOM line${data.items.length === 1 ? "" : "s"}. Live DigiKey details and quantity pricing loaded where available.`;
   } catch (error) {
     showError(error.message);
+    uploadDetails.textContent = "BOM import could not be completed.";
   }
 }
 

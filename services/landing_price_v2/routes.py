@@ -7,7 +7,7 @@ from openpyxl import Workbook
 from . import landing_v2
 from .calculator import SUPPORTED_CURRENCIES, calculate_landing_price
 from .database import get_active_charge_config
-from .digikey_api import DigiKeyAPIError, lookup_product_details
+from .digikey_api import DigiKeyAPIError, lookup_product_details, select_price_tier
 from .excel_import import (
     MAX_IMPORT_ROWS,
     SUPPORTED_UPLOAD_FORMATS,
@@ -168,6 +168,37 @@ def import_excel():
                 if product
                 else {"found": False}
             )
+            # Excel uploads need the same live catalog details as the manual
+            # Search action. Keep the BOM's entered price/currency intact;
+            # the client uses these matches to display live package pricing.
+            try:
+                live = lookup_product_details(item["mpn"], requested_currency=item["currency"])
+                item["product_details"] = live
+                matches = live.get("matches") or []
+                exact = [match for match in matches if match.get("exact_mpn_match")]
+                selected = exact[0] if len(exact) == 1 else (matches[0] if len(matches) == 1 else None)
+                variations = (selected or {}).get("variations") or []
+                variation = min(
+                    variations,
+                    key=lambda entry: entry.get("minimum_order_quantity") or 0,
+                    default=None,
+                )
+                if variation:
+                    requested_quantity = max(1, int(float(item["quantity"])))
+                    tier = select_price_tier(variation.get("pricing_tiers"), requested_quantity)
+                    if tier:
+                        item["live_quote"] = {
+                            "digikey_product_number": variation.get("digikey_product_number"),
+                            "requested_quantity": requested_quantity,
+                            "break_quantity": tier["break_quantity"],
+                            "unit_price": tier["unit_price"],
+                            "extended_price": requested_quantity * tier["unit_price"],
+                            "currency": tier["currency"],
+                            "available_quantity": variation.get("available_quantity"),
+                        }
+            except DigiKeyAPIError as exc:
+                # A catalog outage should not discard an otherwise readable BOM.
+                item["product_details"] = {"matches": [], "error": str(exc)}
         imported["ok"] = True
         return jsonify(imported)
     except ValueError as exc:

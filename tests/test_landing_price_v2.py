@@ -501,7 +501,8 @@ class LandingPriceV2Tests(unittest.TestCase):
         self.assertEqual(item["currency"], "USD")
         self.assertTrue(item["master"]["found"])
 
-    def test_excel_import_response_contains_master_match_for_frontend_enrichment(self):
+    @patch("services.landing_price_v2.routes.lookup_product_details")
+    def test_excel_import_response_contains_live_details_and_quantity_price(self, lookup):
         workbook = Workbook()
         sheet = workbook.active
         sheet.append(["MPN", "Unit Price", "Quantity"])
@@ -510,6 +511,27 @@ class LandingPriceV2Tests(unittest.TestCase):
         workbook.save(contents)
         workbook.close()
         contents.seek(0)
+        lookup.return_value = {
+            "currency": "USD",
+            "matches": [{
+                "manufacturer_part_number": "ABC123",
+                "manufacturer": "Example Manufacturer",
+                "description": "Example component",
+                "category": "Integrated Circuits",
+                "digikey_part_number": "DK-ABC123",
+                "exact_mpn_match": True,
+                "variations": [{
+                    "digikey_product_number": "DK-ABC123-CT",
+                    "package_type": "Cut Tape",
+                    "minimum_order_quantity": 1,
+                    "available_quantity": 40,
+                    "pricing_tiers": [
+                        {"break_quantity": 1, "unit_price": 2.5, "currency": "USD"},
+                        {"break_quantity": 4, "unit_price": 2.0, "currency": "USD"},
+                    ],
+                }],
+            }],
+        }
 
         response = self.client.post(
             "/api/landing/v2/import-excel",
@@ -521,6 +543,11 @@ class LandingPriceV2Tests(unittest.TestCase):
         item = response.get_json()["items"][0]
         self.assertTrue(item["master"]["found"])
         self.assertEqual(item["mpn"], "ABC123")
+        self.assertEqual(item["product_details"]["matches"][0]["manufacturer"], "Example Manufacturer")
+        self.assertEqual(item["live_quote"]["unit_price"], 2.0)
+        self.assertEqual(item["live_quote"]["requested_quantity"], 4)
+        self.assertEqual(item["unit_price"], 2.5)  # BOM value is preserved.
+        lookup.assert_called_once_with("ABC123", requested_currency="USD")
 
     def test_excel_import_rejects_currencies_other_than_usd_or_inr(self):
         workbook = Workbook()
