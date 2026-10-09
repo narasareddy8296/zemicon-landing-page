@@ -110,7 +110,7 @@ def calculate_landing_price(payload, config):
                 f"SWS rate for {mpn}",
             )
             source = "Manually entered (MPN not in DigiKey master)"
-            hsn_code = ""
+            hsn_code = " ".join(str(item.get("hsn", item.get("hsn_code", "")) or "").split())
         else:
             category = product["category"]
             bcd_rate = Decimal(product["bcd_rate"])

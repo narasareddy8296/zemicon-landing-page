@@ -1,0 +1,237 @@
+# DigiKey Price Selection According to Quantity
+
+This document details how pricing tiers are fetched from DigiKey, converted, and how the unit price is dynamically selected based on order quantity across the backend APIs and frontend user interface.
+
+---
+
+## 1. High-Level Flow Overview
+
+```
+                      +---------------------------------------+
+                      |       DigiKey API v4 Response         |
+                      |   (Product details / StandardPricing) |
+                      +---------------------------------------+
+                                          |
+                                          v
+                      +---------------------------------------+
+                      |     Packaging Variation Filtering     |
+                      |    (Pick lowest MOQ: e.g. Cut Tape)   |
+                      +---------------------------------------+
+                                          |
+                                          v
+                      +---------------------------------------+
+                      |   Restructuring & Landing Conversion  |
+                      |   (USD -> INR landing rate * markup)  |
+                      +---------------------------------------+
+                                          |
+                   +----------------------+----------------------+
+                   |                                             |
+                   v                                             v
++------------------------------------+       +------------------------------------+
+|       Frontend Selection           |       |        Backend Selection           |
+| (PDP & Cart Volume Pricing Grid)   |       |  (BOM, Vendor Offers, & Checkout)  |
+|   lib/utils.js -> getUnitPrice     |       | api/helper.py -> getBestTierPrice  |
++------------------------------------+       +------------------------------------+
+```
+
+---
+
+## 2. API Response & Packaging Variation Normalization
+
+### 2.1 Fetching Pricing
+- **Implementation**: [`DigiKey.get_data_from_digikey`](file:///d:/zemicon_frontend_v2/backend/api/utils.py#L1744-L1777)
+- **Endpoint**: `GET /products/v4/search/{MPN}/productdetails`
+- **Currency Requested**: `USD` (`LOCALE_CURRENCY = USD`).
+  > **Note**: DigiKey requires pricing in USD because Zemicon's landing formula applies duty, forex, and customs multipliers downstream.
+
+### 2.2 Selecting the Lowest-MOQ Packaging Variation
+- **Implementation**: [`DigiKey._normalize_part`](file:///d:/zemicon_frontend_v2/backend/api/utils.py#L1649-L1716)
+- DigiKey parts can have multiple package forms (e.g., Cut Tape MOQ 1, Tape & Reel MOQ 3,000, Digi-Reel, Bulk).
+- DigiKey v4 returns variation-level pricing inside `ProductVariations[].StandardPricing`.
+- The normalization selects the variation having the **lowest minimum order quantity (MOQ)**:
+  ```python
+  variations = [v for v in (prod.get("ProductVariations") or []) if isinstance(v, dict)]
+  if variations:
+      def _moq_key(v):
+          try:
+              return int(v.get("MinimumOrderQuantity") or 0)
+          except (ValueError, TypeError):
+              return 0
+      variation = min(variations, key=_moq_key)
+  ```
+- This ensures individual buyers get accessible break tiers (e.g. 1, 10, 25, 100) instead of reel-level MOQs.
+
+---
+
+## 3. Currency Conversion & Price Restructuring
+
+- **Implementation**: [`DigiKey.get_restructured_price_list`](file:///d:/zemicon_frontend_v2/backend/api/utils.py#L1717-L1739)
+
+Before price tiers are rendered on the frontend or used in checkout, USD prices are converted into final INR selling prices:
+
+$$\text{Final Tier Price} = \text{round}\Big(\text{Unit Price (USD)} \times \text{Landing Rate} \times \text{Vendor Price Multiplier}, 2\Big)$$
+
+Where:
+- **Landing Rate**: `DIGIKEY_USD_TO_INR_RATE` (or system `get_usd_to_inr_rate()`, e.g., ~140 covering forex, customs duty, insurance, and freight).
+- **Vendor Price Multiplier**: `vendor.price_multiplier` configured on the DigiKey `Vendor` model row.
+
+### Restructured Tier Output Format
+```json
+[
+  {
+    "quantity": 1,
+    "minQuantity": 1,
+    "PriceBreak": 1,
+    "price": 85.50,
+    "currency": "INR"
+  },
+  {
+    "quantity": 10,
+    "minQuantity": 10,
+    "PriceBreak": 10,
+    "price": 72.10,
+    "currency": "INR"
+  },
+  {
+    "quantity": 100,
+    "minQuantity": 100,
+    "PriceBreak": 100,
+    "price": 58.40,
+    "currency": "INR"
+  }
+]
+```
+
+---
+
+## 4. Price Selection Algorithm According to Quantity
+
+When a user specifies an order quantity $Q$, the system determines the unit price $P(Q)$ based on volume break tiers.
+
+### 4.1 Backend: `getBestTierPrice`
+- **Location**: [`backend/api/helper.py`](file:///d:/zemicon_frontend_v2/backend/api/helper.py#L507-L516)
+- **Usage**: [`backend/orders/views.py`](file:///d:/zemicon_frontend_v2/backend/orders/views.py#L750-L755) (Checkout) and [`backend/authentication/utils.py`](file:///d:/zemicon_frontend_v2/backend/authentication/utils.py#L593-L594) (BOM tool)
+
+```python
+def getBestTierPrice(tier_price_list, quantity):
+    discount = None
+    distance = 999999999
+    for tier in tier_price_list:
+        if int(tier.get("PriceBreak")) <= quantity and (
+            (quantity - int(tier.get("PriceBreak"))) < distance
+        ):
+            discount = tier
+            distance = quantity - int(tier.get("PriceBreak"))
+    return discount
+```
+
+#### Logic:
+1. Filters for tiers whose `PriceBreak <= quantity`.
+2. Minimizes `(quantity - PriceBreak)`, effectively finding the **highest volume break achieved**.
+3. Returns the matching tier dict (`{"price": ..., "PriceBreak": ...}`).
+
+---
+
+### 4.2 Backend: `best_tier` (Offer Comparison & PDP Ranking)
+- **Location**: [`backend/api/vendor_offers.py`](file:///d:/zemicon_frontend_v2/backend/api/vendor_offers.py#L271-L320)
+- **Usage**: Evaluates DigiKey offers against other vendors (Mouser, Waldom, Element14, etc.) at any given quantity.
+
+#### Logic:
+1. Filters valid tiers where `break_quantity <= quantity`.
+2. If reached: selects the highest break quantity tier (tie-breaking on lowest price).
+3. If quantity is below the first break (e.g., $Q < \text{MOQ}$): defaults to the lowest break quantity tier as the base unit price.
+
+---
+
+### 4.3 Frontend: `getUnitPrice` (PDP & Cart)
+- **Location**: [`lib/utils.js`](file:///d:/zemicon_frontend_v2/lib/utils.js#L143-L162)
+- **Usage**:
+  - [`components/pdp/ProductDetail.jsx`](file:///d:/zemicon_frontend_v2/components/pdp/ProductDetail.jsx#L148-L150)
+  - Shopping Cart quantity steppers and subtotal calculations.
+
+```javascript
+export const getUnitPrice = (pricingArray, quantity) => {
+  if (!Array.isArray(pricingArray) || pricingArray.length === 0) {
+    return 0;
+  }
+  const qty = parseInt(quantity) || 1;
+  const normalizedArray = pricingArray.map((p) => ({
+    ...p,
+    quantity: parseInt(p.quantity ?? p.minQuantity ?? p.PriceBreak ?? 1) || 1,
+    price: parseFloat(p.price ?? 0) || 0,
+  }));
+
+  // Sort descending by break quantity to find highest break <= requested quantity
+  const sorted = [...normalizedArray].sort((a, b) => b.quantity - a.quantity);
+  const found = sorted.find((i) => qty >= i.quantity);
+  if (found) return found.price;
+
+  // Fallback to lowest base tier if requested quantity is below first break
+  const baseTier = [...normalizedArray].sort((a, b) => a.quantity - b.quantity)[0];
+  return baseTier ? baseTier.price : 0;
+};
+```
+
+#### UI Interaction:
+- When a user inputs a quantity, `handleQuantityChange(value)` executes `getUnitPrice(pricing, value)`.
+- If a user clicks any tier row in the **Volume Pricing** table, the quantity input changes to that tier's break quantity, highlighting the selected tier and recalculating the total amount ($Q \times \text{unitPrice}$).
+
+---
+
+## 5. Checkout Validation & Stock Constraints
+
+- **Location**: [`backend/orders/views.py`](file:///d:/zemicon_frontend_v2/backend/orders/views.py#L436-L479) (`CreateCheckoutAPI`)
+
+When an order containing DigiKey parts is submitted:
+1. **Live Stock Verification**:
+   ```python
+   available_stock = int(digikey_data.get("StockQuantity", 0) or 0)
+   ```
+2. **MOQ Enforcement**:
+   ```python
+   moq = int(digikey_data.get("MinOrderQuantity", 1))
+   quantity = requested_qty if requested_qty >= moq else moq
+   ```
+3. **Stock Ceiling Validation**:
+   - If `quantity > available_stock`, an `insufficient_stock` error is raised.
+4. **Final Unit Price & Subtotal Calculation**:
+   ```python
+   tier_price_list = DigiKey().get_restructured_price_list(digikey_data.get("PriceList", []))
+   tier_price = getBestTierPrice(tier_price_list, quantity)
+   unit_price = tier_price.get("price", 0) if tier_price else 0
+   amount = round(quantity * unit_price, 2)
+   ```
+
+---
+
+## 6. Concrete Walkthrough Example
+
+Suppose a DigiKey part returns:
+- Minimum Order Quantity (MOQ): `1`
+- Available Stock: `5,000`
+- Restructured Price Tiers (INR):
+  - Tier 1: Break = `1`, Price = `₹100.00`
+  - Tier 2: Break = `25`, Price = `₹85.00`
+  - Tier 3: Break = `100`, Price = `₹70.00`
+  - Tier 4: Break = `500`, Price = `₹55.00`
+
+| Requested Quantity ($Q$) | Qualifying Tiers | Selected Tier Break | Effective Unit Price | Line Total | Note |
+|---|---|---|---|---|---|
+| **5** | Break 1 | 1 | **₹100.00** | ₹500.00 | Does not reach Tier 2 |
+| **25** | Break 1, Break 25 | 25 | **₹85.00** | ₹2,125.00 | Exact match for Tier 2 |
+| **80** | Break 1, Break 25 | 25 | **₹85.00** | ₹6,800.00 | $25 \le Q < 100$ |
+| **100** | Break 1, 25, 100 | 100 | **₹70.00** | ₹7,000.00 | Volume discount applies |
+| **750** | Break 1, 25, 100, 500 | 500 | **₹55.00** | ₹41,250.00 | Highest break reached |
+
+---
+
+## 7. Summary of Key Files
+
+| Component / Function | File Path | Responsibility |
+|---|---|---|
+| `DigiKey._normalize_part` | [`backend/api/utils.py`](file:///d:/zemicon_frontend_v2/backend/api/utils.py#L1649) | Selects lowest-MOQ package variation & normalizes raw price tiers |
+| `DigiKey.get_restructured_price_list` | [`backend/api/utils.py`](file:///d:/zemicon_frontend_v2/backend/api/utils.py#L1717) | Converts USD prices using landing rate & vendor markup to INR |
+| `getBestTierPrice` | [`backend/api/helper.py`](file:///d:/zemicon_frontend_v2/backend/api/helper.py#L507) | Backend quantity-based tier matching for orders and BOM |
+| `best_tier` | [`backend/api/vendor_offers.py`](file:///d:/zemicon_frontend_v2/backend/api/vendor_offers.py#L271) | Offer ranking and comparison across vendors by quantity |
+| `getUnitPrice` | [`lib/utils.js`](file:///d:/zemicon_frontend_v2/lib/utils.js#L143) | Frontend PDP and Cart dynamic price break selection |
+| `CreateCheckoutAPI` | [`backend/orders/views.py`](file:///d:/zemicon_frontend_v2/backend/orders/views.py#L436) | Enforces MOQ, stock check, and locks final tier price at checkout |

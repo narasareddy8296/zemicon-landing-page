@@ -1,6 +1,7 @@
 import io
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from flask import Flask
@@ -23,6 +24,7 @@ def make_master_workbook(path):
         [
             ("ABC123", "Semiconductor", "85423100", 0.1, 0.1),
             ("PASSIVE1", "Passives", "85334090", 0, 0.1),
+            ("STLINK-V3PWR", "Electromechanical", "84719000", 0, 0.1),
         ],
         2,
     ):
@@ -82,6 +84,166 @@ class LandingPriceV2Tests(unittest.TestCase):
                 "source": "DigiKey Excel",
             },
         )
+
+    def test_digikey_tier_selection_matches_frontend_break_and_base_fallback(self):
+        from services.landing_price_v2.digikey_api import select_price_tier
+
+        tiers = [
+            {"break_quantity": 1, "unit_price": 57.33, "currency": "INR"},
+            {"break_quantity": 10, "unit_price": 35.067, "currency": "INR"},
+            {"break_quantity": 50, "unit_price": 26.2762, "currency": "INR"},
+            {"break_quantity": 100, "unit_price": 23.5626, "currency": "INR"},
+            {"break_quantity": 500, "unit_price": 18.99152, "currency": "INR"},
+        ]
+        for quantity, price_break in ((1, 1), (10, 10), (25, 10), (50, 50), (100, 100), (750, 500), (0, None)):
+            selected = select_price_tier(tiers, quantity)
+            self.assertEqual(selected["break_quantity"] if selected else None, price_break)
+        self.assertEqual(select_price_tier(tiers, 0), None)
+        self.assertIsNone(select_price_tier([{"break_quantity": 1, "unit_price": None, "currency": "INR"}], 1))
+        self.assertIsNone(select_price_tier([], 1))
+
+    def test_digikey_package_selection_uses_lowest_moq(self):
+        from services.landing_price_v2.digikey_api import select_package_variation
+
+        reel = {"package_type": "Tape & Reel", "minimum_order_quantity": 3000}
+        cut_tape = {"package_type": "Cut Tape", "minimum_order_quantity": 1}
+        self.assertIs(select_package_variation([reel, cut_tape]), cut_tape)
+        self.assertIsNone(select_package_variation([]))
+
+    def test_digikey_customer_tier_falls_back_to_standard_if_unusable(self):
+        from services.landing_price_v2.digikey_api import _parse_variation
+
+        variation = _parse_variation({
+            "MyPricing": [{"BreakQuantity": 1, "UnitPrice": None}],
+            "StandardPricing": [{"BreakQuantity": 1, "UnitPrice": 2.5}],
+        }, "EUR")
+        self.assertEqual(variation["pricing_source"], "StandardPricing")
+        self.assertEqual(variation["pricing_tiers"][0]["unit_price"], 2.5)
+
+
+    def test_catalog_hsn_is_returned_for_exact_mpn_match(self):
+        response = self.client.get("/api/landing/v2/product/stlink-v3pwr")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()["found"])
+        self.assertEqual(response.get_json()["mpn"], "STLINK-V3PWR")
+        self.assertEqual(response.get_json()["hsn"], "84719000")
+
+    @patch("services.landing_price_v2.digikey_api.requests.request")
+    def test_digikey_search_pricing_returns_observed_product_fields_and_currency(self, request_api):
+        self.app.config.update(
+            DIGIKEY_CLIENT_ID="test-client",
+            DIGIKEY_CLIENT_SECRET="test-secret",
+            DIGIKEY_CUSTOMER_ID="16159631",
+        )
+        token = unittest.mock.Mock(ok=True)
+        token.json.return_value = {"access_token": "test-token", "expires_in": 600}
+        pricing = unittest.mock.Mock(ok=True)
+        pricing.json.return_value = {
+            "ProductsCount": 1,
+            "SettingsUsed": {"SearchLocale": {"Site": "IN", "Language": "en", "Currency": "EUR"}},
+            "ProductPricings": [{
+                "ManufacturerProductNumber": "ABC123",
+                "Manufacturer": {"Name": "Example Manufacturer"},
+                "DigiKeyProductNumber": "DIGIKEY-SKU-ND",
+                "Category": {"Name": "Integrated Circuits"},
+                "Description": {"ProductDescription": "Example component", "DetailedDescription": "A detailed example"},
+                "QuantityAvailable": 99,
+                "ProductVariations": [{
+                    "DigiKeyProductNumber": "DIGIKEY-SKU-ND",
+                    "PackageType": {"Name": "Cut Tape (CT) & Digi-Reel®"},
+                    "QuantityAvailableforPackageType": 12,
+                    "MinimumOrderQuantity": 1,
+                    "StandardPricing": [
+                        {"BreakQuantity": 1, "UnitPrice": 5.2, "TotalPrice": 5.2},
+                        {"BreakQuantity": 10, "UnitPrice": 4.0, "TotalPrice": 40.0},
+                        {"BreakQuantity": 25, "UnitPrice": 3.5, "TotalPrice": 87.5},
+                    ],
+                    "MyPricing": [],
+                }],
+            }],
+        }
+        request_api.side_effect = [token, pricing]
+
+        response = self.client.get("/api/landing/v2/digikey-product/ABC123?currency=USD")
+        self.assertEqual(response.status_code, 200)
+        result = response.get_json()
+        self.assertTrue(result["found"])
+        self.assertEqual(result["currency"], "EUR")
+        match = result["matches"][0]
+        self.assertEqual(match["manufacturer"], "Example Manufacturer")
+        self.assertEqual(match["category"], "Integrated Circuits")
+        self.assertEqual(match["description"], "Example component")
+        self.assertEqual(match["detailed_description"], "A detailed example")
+        self.assertEqual(match["available_quantity"], 99)
+        self.assertEqual(match["variations"][0]["available_quantity"], 12)
+        self.assertEqual(match["variations"][0]["package_type"], "Cut Tape (CT) & Digi-Reel®")
+        self.assertEqual([tier["break_quantity"] for tier in match["variations"][0]["pricing_tiers"]], [1, 10, 25])
+        self.assertEqual(request_api.call_count, 2)
+        self.assertTrue(request_api.call_args_list[1].args[1].endswith("/search/ABC123/pricing"))
+        self.assertEqual(request_api.call_args_list[1].kwargs["headers"]["X-DIGIKEY-Locale-Currency"], "USD")
+        self.assertEqual(request_api.call_args_list[1].kwargs["headers"]["X-DIGIKEY-Customer-Id"], "16159631")
+        self.assertNotIn("test-secret", response.get_data(as_text=True))
+
+    @patch("services.landing_price_v2.digikey_api.requests.request")
+    def test_digikey_customer_pricing_tiers_are_used_when_present(self, request_api):
+        self.app.config.update(DIGIKEY_CLIENT_ID="test-client", DIGIKEY_CLIENT_SECRET="test-secret")
+        token = unittest.mock.Mock(ok=True)
+        token.json.return_value = {"access_token": "test-token", "expires_in": 600}
+        pricing = unittest.mock.Mock(ok=True)
+        pricing.json.return_value = {
+            "SettingsUsed": {"SearchLocale": {"Currency": "INR"}},
+            "ProductPricings": [{
+                "ManufacturerProductNumber": "ABC123",
+                "ProductVariations": [{
+                    "MinimumOrderQuantity": 1,
+                    "MyPricing": [{"BreakQuantity": 1, "UnitPrice": 12.5}],
+                    "StandardPricing": [{"BreakQuantity": 1, "UnitPrice": 15.0}],
+                }],
+            }],
+        }
+        request_api.side_effect = [token, pricing]
+        result = self.client.get("/api/landing/v2/digikey-product/ABC123").get_json()
+        variation = result["matches"][0]["variations"][0]
+        self.assertEqual(variation["pricing_source"], "MyPricing")
+        self.assertEqual(variation["pricing_tiers"][0]["unit_price"], 12.5)
+
+    def test_live_digikey_endpoint_reports_not_found_without_fabricated_fields(self):
+        from services.landing_price_v2.digikey_api import lookup_product_details
+
+        with self.app.app_context():
+            self.app.config.update(DIGIKEY_CLIENT_ID="test-client", DIGIKEY_CLIENT_SECRET="test-secret")
+            with patch("services.landing_price_v2.digikey_api.requests.request") as request_api:
+                token = unittest.mock.Mock(ok=True)
+                token.json.return_value = {"access_token": "test-token", "expires_in": 600}
+                pricing = unittest.mock.Mock(ok=True)
+                pricing.json.return_value = {"ProductsCount": 0, "ProductPricings": [], "SettingsUsed": {"SearchLocale": {"Site": "IN", "Language": "en", "Currency": "INR"}}}
+                request_api.side_effect = [token, pricing]
+                result = lookup_product_details("UNKNOWN")
+        self.assertEqual(result["matches"], [])
+        self.assertEqual(result["currency"], "INR")
+
+    @patch("services.landing_price_v2.digikey_api.requests.request")
+    def test_digikey_authentication_rate_limit_timeout_and_currency_failures_are_reported(self, request_api):
+        self.app.config.update(DIGIKEY_CLIENT_ID="test-client", DIGIKEY_CLIENT_SECRET="test-secret")
+        token = unittest.mock.Mock(ok=True)
+        token.json.return_value = {"access_token": "test-token", "expires_in": 600}
+        unauthorized = unittest.mock.Mock(ok=False, status_code=401)
+        request_api.side_effect = [token, unauthorized]
+        response = self.client.get("/api/landing/v2/digikey-product/ABC123")
+        self.assertEqual(response.status_code, 502)
+        self.assertIn("authentication", response.get_json()["error"].lower())
+
+        self.app.extensions.pop("digikey_oauth_token", None)
+        request_api.side_effect = [token, unittest.mock.Mock(ok=False, status_code=429)]
+        response = self.client.get("/api/landing/v2/digikey-product/ABC123")
+        self.assertEqual(response.status_code, 429)
+        self.assertIn("rate limit", response.get_json()["error"].lower())
+
+        from requests import Timeout
+        self.app.extensions.pop("digikey_oauth_token", None)
+        request_api.side_effect = [token, Timeout("timeout")]
+        response = self.client.get("/api/landing/v2/digikey-product/ABC123")
+        self.assertEqual(response.status_code, 504)
 
     def test_freight_threshold_and_item_tariffs(self):
         below = self.calculate(
@@ -339,6 +501,27 @@ class LandingPriceV2Tests(unittest.TestCase):
         self.assertEqual(item["currency"], "USD")
         self.assertTrue(item["master"]["found"])
 
+    def test_excel_import_response_contains_master_match_for_frontend_enrichment(self):
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.append(["MPN", "Unit Price", "Quantity"])
+        sheet.append(["ABC123", 2.5, 4])
+        contents = io.BytesIO()
+        workbook.save(contents)
+        workbook.close()
+        contents.seek(0)
+
+        response = self.client.post(
+            "/api/landing/v2/import-excel",
+            data={"file": (contents, "purchase.xlsx")},
+            content_type="multipart/form-data",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        item = response.get_json()["items"][0]
+        self.assertTrue(item["master"]["found"])
+        self.assertEqual(item["mpn"], "ABC123")
+
     def test_excel_import_rejects_currencies_other_than_usd_or_inr(self):
         workbook = Workbook()
         sheet = workbook.active
@@ -401,7 +584,7 @@ class LandingPriceV2Tests(unittest.TestCase):
     def test_v2_screen_and_master_export(self):
         page = self.client.get("/landing/v2")
         self.assertEqual(page.status_code, 200)
-        self.assertIn(b"Zemicon Landing Price Calculator", page.data)
+        self.assertIn(b"Zemicon | Landing Price Calculator", page.data)
         self.assertIn(b'<option value="digikey" selected>DigiKey</option>', page.data)
         self.assertIn(b'<option value="other">Other</option>', page.data)
         self.assertIn(b'id="invoiceCurrency"', page.data)
@@ -411,8 +594,7 @@ class LandingPriceV2Tests(unittest.TestCase):
         self.assertIn(b'<th>Amount (INR \xe2\x82\xb9)</th>', page.data)
         self.assertIn(b'id="invoiceSummary"', page.data)
         self.assertIn(b'id="tariffsSection"', page.data)
-        self.assertIn(b"BCD amount (INR)", page.data)
-        self.assertIn(b"SWS amount (INR)", page.data)
+        self.assertIn(b'id="tariffRows"', page.data)
         self.assertLess(
             page.data.index(b'id="invoiceSummary"'),
             page.data.index(b'id="tariffsSection"'),

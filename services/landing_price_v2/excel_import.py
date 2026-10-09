@@ -1,7 +1,9 @@
+import csv
 import re
+from io import BytesIO, StringIO
 from pathlib import Path
 
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.utils import get_column_letter
 
 
@@ -11,32 +13,135 @@ MPN_ALIASES = {
     "mpn",
     "manufacturerpartnumber",
     "manufacturerpartno",
+    "manufacturerpart",
+    "manufacturerpn",
+    "mfrpart",
+    "mfrpartnumber",
+    "mfrpartnum",
+    "mfrpartno",
+    "mfrpn",
     "partnumber",
     "partno",
-    "mfrpartnumber",
-    "mfrpartno",
+    "part",
 }
 PRICE_ALIASES = {
     "unitprice",
+    "unitpriceusd",
+    "unitpriceinr",
+    "priceeach",
+    "priceusd",
+    "priceinr",
+    "eachprice",
     "perunitprice",
     "unitcost",
+    "unitcostusd",
+    "unitcostinr",
+    "costeach",
     "priceunit",
     "priceperunit",
     "purchaseprice",
     "vendorunitprice",
+    "rate",
+    "unitrate",
+    "rateeach",
+    "price",
+    "cost",
 }
 QUANTITY_ALIASES = {
     "quantity",
     "qty",
+    "bomqty",
+    "orderquantity",
     "orderqty",
+    "reqqty",
     "requiredqty",
     "purchaseqty",
 }
 CURRENCY_ALIASES = {"currency", "billingcurrency", "pricecurrency"}
+SUPPORTED_UPLOAD_FORMATS = {".xlsx", ".xls", ".csv", ".tsv", ".txt", ".pdf"}
 
 
 def normalize_header(value):
     return re.sub(r"[^a-z0-9]", "", str(value or "").casefold())
+
+
+def _rows_to_xlsx(rows):
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "BOM"
+    for row in rows:
+        worksheet.append(list(row))
+    output = BytesIO()
+    workbook.save(output)
+    workbook.close()
+    output.seek(0)
+    return output
+
+
+def normalize_upload(stream, filename):
+    """Return an xlsx stream for supported spreadsheet, CSV, and text PDF files."""
+    suffix = Path(filename).suffix.casefold()
+    if suffix not in SUPPORTED_UPLOAD_FORMATS:
+        raise ValueError("Upload a .xlsx, .xls, .csv, .tsv, .txt, or text-based .pdf BOM file.")
+    if suffix == ".xlsx":
+        return stream
+
+    content = stream.read()
+    if suffix in {".csv", ".tsv", ".txt"}:
+        decoded = None
+        for encoding in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
+            try:
+                decoded = content.decode(encoding)
+                break
+            except UnicodeDecodeError:
+                continue
+        if decoded is None:
+            raise ValueError("Could not decode this CSV file. Save it as UTF-8 and upload again.")
+        try:
+            dialect = csv.Sniffer().sniff(decoded[:8192], delimiters=",;\t|")
+        except csv.Error:
+            dialect = csv.excel_tab if suffix == ".tsv" else csv.excel
+        return _rows_to_xlsx(csv.reader(StringIO(decoded), dialect))
+
+    if suffix == ".xls":
+        import xlrd
+
+        try:
+            book = xlrd.open_workbook(file_contents=content, on_demand=True)
+            rows = (
+                book.sheet_by_index(0).row_values(index)
+                for index in range(book.sheet_by_index(0).nrows)
+            )
+            output = _rows_to_xlsx(rows)
+            book.release_resources()
+            return output
+        except Exception as exc:
+            raise ValueError("Could not read this .xls workbook. Save it as .xlsx and try again.") from exc
+
+    try:
+        import pdfplumber
+
+        extracted_rows = []
+        with pdfplumber.open(BytesIO(content)) as pdf:
+            for page in pdf.pages:
+                for table in page.extract_tables() or []:
+                    extracted_rows.extend(table)
+            if not extracted_rows:
+                for page in pdf.pages:
+                    text = page.extract_text() or ""
+                    for line in text.splitlines():
+                        cells = re.split(r"\s{2,}|\s*\|\s*", line.strip())
+                        if len(cells) > 1:
+                            extracted_rows.append(cells)
+        if not extracted_rows:
+            raise ValueError(
+                "No readable table was found in this PDF. Scanned PDFs need OCR; export the BOM as CSV or Excel and upload it."
+            )
+        return _rows_to_xlsx(extracted_rows)
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError("Could not read this PDF. Export the BOM as CSV or Excel and upload it.") from exc
 
 
 def _header_candidates(values):
@@ -48,9 +153,10 @@ def _header_candidates(values):
         label = " ".join(str(value or "").split())
         labels.append({"index": column - 1, "label": label or f"Column {get_column_letter(column)}"})
         normalized = normalize_header(value)
+        is_extended_price = any(term in normalized for term in ("extended", "total", "amount"))
         if normalized in MPN_ALIASES:
             candidates["mpn"].append(column - 1)
-        if normalized in PRICE_ALIASES:
+        if normalized in PRICE_ALIASES and not is_extended_price:
             candidates["unit_price"].append(column - 1)
         if normalized in QUANTITY_ALIASES:
             candidates["quantity"].append(column - 1)

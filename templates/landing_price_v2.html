@@ -8,14 +8,22 @@
 </head>
 <body>
   <header class="v2-header">
-    <div>
-      <h1>Zemicon Landing Price Calculator</h1>
-      <p>Build a shipment from manual entries or an Excel purchase list.</p>
+    <div class="hero-copy">
+      <span class="eyebrow">PROCUREMENT · IMPORT COSTING</span>
+      <h1>Landing price calculator</h1>
+      <p>Turn a BOM into a clear, line-by-line landed cost estimate.</p>
+      <nav class="workflow-nav" aria-label="Calculator sections">
+        <a href="#productsSection"><span>01</span> Products</a>
+        <a href="#assessableSection"><span>02</span> Invoice &amp; charges</a>
+        <a href="#tariffsSection"><span>03</span> Duties &amp; HSN</a>
+        <a href="#shipmentChargesSection"><span>04</span> Shipment charges</a>
+      </nav>
     </div>
+    <div class="hero-badge"><span class="hero-badge-dot"></span> Shipment estimate</div>
   </header>
 
   <main class="v2-main">
-    <section class="panel">
+    <section id="productsSection" class="panel workflow-product">
       <div class="section-heading">
         <div>
           <h2>1. Add products</h2>
@@ -31,10 +39,11 @@
         <p class="helper">Amount is quantity × per-unit price, shown in INR. For USD, the calculator converts using the live interbank USD/INR rate plus 2%. INR prices need no exchange rate.</p>
       </div>
       <div id="excelPanel" class="hidden">
-        <label class="upload-label" for="excelFile">Purchase workbook (.xlsx)</label>
-        <input id="excelFile" type="file" accept=".xlsx">
-        <button id="inspectExcel" class="button" type="button">Inspect workbook</button>
-        <p class="helper">The preview imports MPN, unit price, and quantity. The selected shipment currency and exchange rate above apply to all imported lines. Quantity defaults to 1 only if there is no quantity column.</p>
+        <label class="upload-label" for="excelFile">Upload BOM (.xlsx, .xls, .csv, .tsv, .txt, or .pdf)</label>
+        <input id="excelFile" type="file" accept=".xlsx,.xls,.csv,.tsv,.txt,.pdf">
+        <button id="inspectExcel" class="button" type="button">Import selected workbook</button>
+        <p class="helper">Choose a BOM to import MPN, unit price, and quantity automatically. Excel, CSV, TSV, TXT, and text-based PDF files are supported; scanned image PDFs need OCR and should be exported to CSV or Excel. If the column names are unclear, you can select them manually. Quantity defaults to 1 only if there is no quantity column.</p>
+        <p id="uploadDetails" class="helper hidden" role="status" aria-live="polite"></p>
         <div id="columnChoices"></div>
       </div>
 
@@ -75,7 +84,7 @@
 
     <section
       id="assessableSection"
-      class="panel"
+      class="panel workflow-assessment"
       data-insurance-rate="1.125"
       data-free-shipping-threshold="{{ charges['DIGIKEY_FREE_SHIPPING_THRESHOLD_INR'] }}"
       data-international-freight="{{ charges['DIGIKEY_INTERNATIONAL_FREIGHT_INR'] }}"
@@ -99,35 +108,7 @@
       </label>
     </section>
 
-    <section
-      id="tariffsSection"
-      class="panel"
-      data-free-shipping-threshold="{{ charges['DIGIKEY_FREE_SHIPPING_THRESHOLD_INR'] }}"
-      data-international-freight="{{ charges['DIGIKEY_INTERNATIONAL_FREIGHT_INR'] }}"
-    >
-      <div class="section-heading">
-        <div>
-          <h2>3. DigiKey master / tariffs</h2>
-          <p>Each MPN has its assessable value, BCD and SWS amounts together on the same row. BCD is rounded to the nearest whole rupee before SWS is calculated.</p>
-        </div>
-      </div>
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>MPN</th><th>Master status</th><th>Component category</th>
-              <th>Invoice (INR)</th><th>Insurance 1.125% (INR)</th><th>Freight (INR)</th>
-              <th>Assessable value (INR)</th><th>BCD rate (%)</th><th>BCD amount (INR)</th>
-              <th>SWS rate (%)</th><th>SWS amount (INR)</th>
-            </tr>
-          </thead>
-          <tbody id="tariffRows"></tbody>
-        </table>
-      </div>
-      <p id="tariffEmpty" class="helper">Add product lines above to see DigiKey master and tariff details.</p>
-    </section>
-
-    <section class="panel">
+    <section id="shipmentChargesSection" class="panel workflow-charges">
       <div class="section-heading">
         <div>
           <h2>4. Shipment charges</h2>
@@ -149,7 +130,24 @@
       <div id="error" class="error hidden" role="alert"></div>
     </section>
 
-    <section id="results" class="panel hidden">
+    <section
+      id="tariffsSection"
+      class="panel workflow-tariffs"
+      data-free-shipping-threshold="{{ charges['DIGIKEY_FREE_SHIPPING_THRESHOLD_INR'] }}"
+      data-international-freight="{{ charges['DIGIKEY_INTERNATIONAL_FREIGHT_INR'] }}"
+    >
+      <div class="section-heading">
+        <div>
+          <h2>3. DigiKey master / tariffs</h2>
+          <p>Review catalog matches, HSN/CTSH codes, and duty rates for every part. Catalog rates are read-only; missing parts need rates entered for this calculation.</p>
+        </div>
+        <div class="tariff-legend" aria-label="Catalog status legend"><span><i class="legend-dot found"></i> In catalog</span><span><i class="legend-dot missing"></i> Needs review</span></div>
+      </div>
+      <div id="tariffRows" class="tariff-grid"></div>
+      <p id="tariffEmpty" class="helper">Add product lines above to see DigiKey master and tariff details.</p>
+    </section>
+
+    <section id="results" class="panel workflow-results hidden">
       <div class="section-heading">
         <div><h2>5. Landing price results</h2><p id="resultSummary"></p></div>
       </div>

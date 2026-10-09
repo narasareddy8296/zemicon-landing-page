@@ -51,9 +51,9 @@ Use a reverse proxy and TLS for deployments beyond localhost.
 ## Calculator workflow
 
 1. Select one invoice currency for the shipment. For USD, enter the live interbank USD/INR rate once; the calculator applies a 2% adjustment. INR uses an exchange rate of 1.
-2. Enter each component's MPN, quantity, and per-unit price. Each product row displays Amount = quantity × per-unit price, shown in INR (USD entries are converted using the adjusted exchange rate).
+2. Enter each component's MPN, quantity, and per-unit price. Each product row displays Amount = quantity Ãƒâ€” per-unit price, shown in INR (USD entries are converted using the adjusted exchange rate).
 3. The calculator computes insurance at 1.125% of each converted INR invoice amount.
-4. If total shipment invoice value is below ₹7,000, the ₹1,200 international freight charge is allocated by each line's share of the shipment invoice. Freight is zero at or above ₹7,000.
+4. If total shipment invoice value is below Ã¢â€šÂ¹7,000, the Ã¢â€šÂ¹1,200 international freight charge is allocated by each line's share of the shipment invoice. Freight is zero at or above Ã¢â€šÂ¹7,000.
 5. Enter optional shipment-level Other charges in INR. These charges are allocated by invoice share and added to landed cost, but excluded from assessable value.
 6. Review the DigiKey tariff table. BCD is calculated on each line's assessable value (invoice + insurance + allocated international freight), rounded to the nearest whole rupee, then SWS is calculated on that rounded BCD. If an MPN is not in the master, enter its BCD/SWS rates for the calculation.
 7. Enter the team's margin percentage. The margin is applied to the landed cost of each line and added to the shipment selling total; the per-line selling price is shown separately. IGST remains optional and, when enabled, is calculated after margin.
@@ -64,9 +64,13 @@ Remittance, CHA/port dues, and domestic trucking are optional configured shipmen
 
 The initial master workbook is `static/digikey-1.xlsx`. On first use, the calculator imports its MPN, category, HSN/CTSH, BCD, and SWS data into the operational SQLite database. Rates stored in the workbook as fractions (such as `0.1`) are imported as percentages (`10%`). Existing master records are not overwritten when duplicates are added.
 
-The calculator accepts `.xlsx` purchase lists up to 10 MB. It searches for MPN, unit-price, and quantity columns and asks for a selection when the workbook's layout is ambiguous. Total/extended-price columns are not interpreted as unit prices; quantity defaults to 1 if missing. The shipment currency and USD exchange rate selected on the page apply to all imported rows.
+The calculator accepts `.xlsx`, `.xls`, `.csv`, `.tsv`, `.txt`, and text-based `.pdf` purchase lists up to 10 MB. It searches for MPN, unit-price, and quantity columns and asks for a selection when the file's layout is ambiguous. Total/extended-price columns are not interpreted as unit prices; quantity defaults to 1 if missing. Scanned image-only PDFs require OCR and should be exported to CSV or Excel before upload. The shipment currency and USD exchange rate selected on the page apply to all imported rows.
 
 The operational DigiKey master can be downloaded using **Export DigiKey master**.
+
+### Live DigiKey part details
+
+To show manufacturer, category, product description, and DigiKey pricing after entering an MPN, configure `DIGIKEY_CLIENT_ID` and `DIGIKEY_CLIENT_SECRET` as server environment variables. The backend uses DigiKey's two-legged OAuth flow and Product Information v4 Search `pricing` endpoint. It reads the `ProductPricings` matches, package-specific `QuantityAvailableforPackageType` stock, and `MyPricing` / `StandardPricing` entries (`BreakQuantity`, `UnitPrice`, `TotalPrice`). The calculator selects the greatest break quantity less than or equal to the requested quantity and computes the extended line price from that unit price. Multiple matches require selection, known insufficient stock blocks calculation, and missing pricing or stock is shown as unavailable. The price remains editable, while existing user-entered and BOM prices are preserved. Credentials and access tokens stay on the server. Optional settings are `DIGIKEY_CUSTOMER_ID`, `DIGIKEY_API_BASE`, `DIGIKEY_TOKEN_URL`, `DIGIKEY_LOCALE_SITE` (defaults to `IN`), `DIGIKEY_LOCALE_CURRENCY` (defaults to `INR`), and `DIGIKEY_LOCALE_LANGUAGE` (defaults to `en`). If credentials are absent, existing local master lookup and manual entry continue to work.
 
 ## v2 HTTP endpoints
 
@@ -75,6 +79,7 @@ The operational DigiKey master can be downloaded using **Export DigiKey master**
 | `GET /landing/v2` | DigiKey landing-price calculator. |
 | `GET /api/landing/v2/config` | List available currencies and active charge configuration. |
 | `GET /api/landing/v2/product/<mpn>` | Look up an MPN in the operational DigiKey master. |
+| `GET /api/landing/v2/digikey-product/<mpn>` | Look up manufacturer, category, and description through DigiKey Product Information API. |
 | `POST /api/landing/v2/import-excel` | Preview an uploaded `.xlsx` workbook; submit column selections when requested. |
 | `POST /api/landing/v2/calculate` | Calculate line landing prices using master data and shipment rules. |
 | `POST /api/landing/v2/master` | Add missing product tariff records; existing MPNs are unchanged. |
@@ -106,6 +111,8 @@ Example:
 The v2 API is intended for a trusted internal Procurement environment. Deploy it behind the organization's access controls before exposing the master-write endpoint.
 
 ## Project layout
+
+For the complete component map, request flows, DigiKey response fields, pricing/package rules, calculation order, database schema, environment settings, and deployment boundaries, see [Project Architecture](docs/PROJECT_ARCHITECTURE.md).
 
 | Path | Purpose |
 | --- | --- |

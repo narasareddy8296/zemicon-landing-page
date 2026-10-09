@@ -7,7 +7,13 @@ from openpyxl import Workbook
 from . import landing_v2
 from .calculator import SUPPORTED_CURRENCIES, calculate_landing_price
 from .database import get_active_charge_config
-from .excel_import import MAX_IMPORT_ROWS, inspect_upload
+from .digikey_api import DigiKeyAPIError, lookup_product_details
+from .excel_import import (
+    MAX_IMPORT_ROWS,
+    SUPPORTED_UPLOAD_FORMATS,
+    inspect_upload,
+    normalize_upload,
+)
 from .master_lookup import add_master_records, list_master_records, lookup_mpn
 
 
@@ -50,6 +56,26 @@ def product_lookup(mpn):
             "source": product["source"],
         }
     )
+
+
+@landing_v2.get("/api/landing/v2/digikey-product/<path:mpn>")
+def digikey_product_lookup(mpn):
+    """Fetch manufacturer, category and description without exposing credentials."""
+    normalized_mpn = " ".join(mpn.split())
+    if not normalized_mpn:
+        return jsonify({"found": False, "mpn": ""})
+    requested_currency = request.args.get("currency", "").strip().upper()
+    if requested_currency and requested_currency not in SUPPORTED_CURRENCIES:
+        return jsonify({"ok": False, "error": "DigiKey price currency must be USD or INR."}), 400
+    try:
+        result = lookup_product_details(normalized_mpn, requested_currency=requested_currency or None)
+    except DigiKeyAPIError as exc:
+        current_app.logger.warning("DigiKey product lookup failed: %s", exc)
+        return jsonify({"ok": False, "error": str(exc)}), exc.status_code
+    except Exception:
+        current_app.logger.exception("DigiKey product lookup failed")
+        return jsonify({"ok": False, "error": "DigiKey product lookup is temporarily unavailable."}), 502
+    return jsonify({"found": bool(result["matches"]), "mpn": normalized_mpn, **result})
 
 
 @landing_v2.post("/api/landing/v2/master")
@@ -105,8 +131,9 @@ def import_excel():
     upload = request.files.get("file")
     if upload is None or not upload.filename:
         return jsonify({"ok": False, "error": "Choose an Excel workbook to upload."}), 400
-    if Path(upload.filename).suffix.casefold() != ".xlsx":
-        return jsonify({"ok": False, "error": "Upload an .xlsx workbook."}), 400
+    suffix = Path(upload.filename).suffix.casefold()
+    if suffix not in SUPPORTED_UPLOAD_FORMATS:
+        return jsonify({"ok": False, "error": "Upload an .xlsx, .xls, .csv, .tsv, .txt, or text-based .pdf BOM file."}), 400
 
     selection = {}
     for key in ("sheet", "header_row", "mpn_column", "unit_price_column", "quantity_column", "currency_column"):
@@ -117,7 +144,8 @@ def import_excel():
         selection["default_currency"] = request.form["default_currency"].strip().upper()
 
     try:
-        imported = inspect_upload(upload.stream, selection or None)
+        workbook_stream = normalize_upload(upload.stream, upload.filename)
+        imported = inspect_upload(workbook_stream, selection or None)
         if imported.get("needs_selection"):
             imported["ok"] = True
             return jsonify(imported)
