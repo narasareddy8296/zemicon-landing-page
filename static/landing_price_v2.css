@@ -233,6 +233,9 @@ body{background:#f3f6fa;color:#15263b}
 .workflow-nav a span{color:#8bd4c5;font-size:9px;font-weight:800}
 .hero-badge{position:relative;z-index:1;display:flex;align-items:center;gap:8px;margin-top:7px;padding:9px 12px;border:1px solid #ffffff25;border-radius:999px;background:#ffffff0b;color:#e5eff8;font-size:11px;white-space:nowrap}
 .hero-badge-dot{width:7px;height:7px;border-radius:50%;background:#72d4a2;box-shadow:0 0 0 4px #72d4a222}
+.header-actions{position:relative;z-index:2;display:flex;align-items:flex-start;gap:12px}
+.header-vendor{display:flex;flex-direction:column;gap:5px;padding:9px 11px;border:1px solid #ffffff2a;border-radius:10px;background:#ffffff0b;color:#e5eff8;font-size:10px;font-weight:750;white-space:nowrap}
+.header-vendor select{min-width:150px;height:35px;border:1px solid #ffffff35;border-radius:7px;background:#fff;padding:0 10px;color:#183149;font:inherit;font-size:12px;font-weight:700}
 .v2-main{max-width:1320px;margin:24px auto 0;padding:0 24px 48px;display:grid;grid-template-columns:minmax(0,1fr);grid-template-areas:"products" "assessment" "tariffs" "charges" "results";align-items:start;gap:16px}
 .workflow-product{grid-area:products}.workflow-assessment{grid-area:assessment}.workflow-tariffs{grid-area:tariffs}.workflow-charges{grid-area:charges}.workflow-results{grid-area:results}
 .panel{min-width:0;padding:22px;border:1px solid #e0e7ef;border-radius:14px;box-shadow:0 5px 20px #203c5c0a}
@@ -263,6 +266,7 @@ tbody tr:hover{background:#f9fbfd}
 .invoice-total{border-color:#e1e8ef;background:#f8fafc}
 .invoice-total-grand{background:#eaf3fc;border-color:#c9dced}
 .live-price{display:block;margin-top:5px;color:#167553;font-size:10px}
+.stock-total{display:inline-block;min-width:74px;padding:7px 9px;border:1px solid #d8e6ef;border-radius:7px;background:#f3f8fb;color:#245b80;font-size:12px;text-align:center;white-space:nowrap}
 .price-unavailable{display:block;margin-top:5px;color:#a23d32;font-size:10px;font-weight:700}
 .stock-warning{display:none;margin-top:4px;color:#a23d32;font-size:10px;font-weight:700}
 .stock-warning.visible{display:block}
@@ -275,6 +279,7 @@ tbody tr:hover{background:#f9fbfd}
 input:focus,select:focus,button:focus-visible,a:focus-visible{outline:3px solid #72b9e8;outline-offset:2px}
 @media(max-width:900px){
  .v2-header{min-height:0;padding:28px 22px}
+ .header-actions{align-items:flex-end;flex-direction:column;gap:8px}
  .hero-badge{display:none}
  .v2-main{grid-template-columns:minmax(0,1fr);grid-template-areas:"products" "assessment" "tariffs" "charges" "results";padding-right:18px;padding-left:18px}
  .charge-cards{grid-template-columns:repeat(3,minmax(0,1fr))}
@@ -284,6 +289,9 @@ input:focus,select:focus,button:focus-visible,a:focus-visible{outline:3px solid 
 }
 @media(max-width:600px){
  .v2-header{padding:24px 16px 22px}
+ .header-vendor{padding:7px 8px;font-size:9px}
+ .header-vendor select{min-width:112px;width:100%;height:34px;font-size:11px}
+ .header-actions{position:absolute;top:18px;right:16px}
  .v2-header h1{font-size:27px}
  .workflow-nav{gap:6px;margin-top:17px}
  .workflow-nav a{padding:7px 9px;font-size:10px}

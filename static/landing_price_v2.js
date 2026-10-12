@@ -1,4 +1,4 @@
-﻿const $ = (id) => document.getElementById(id);
+const $ = (id) => document.getElementById(id);
 const state = { lines: [], upload: null, lastResult: null };
 
 function escape(value) {
@@ -17,6 +17,18 @@ function money(value, currency) {
   return new Intl.NumberFormat("en-US", {
     style: "currency", currency, minimumFractionDigits: 2
   }).format(Number(value || 0));
+}
+
+function availableStock(line) {
+  const product = line.selectedProduct;
+  if (!product) return null;
+  const productTotal = Number(product.available_quantity);
+  if (product.available_quantity != null && Number.isFinite(productTotal)) return productTotal;
+  const packageStocks = (product.variations || [])
+    .filter((variation) => variation.available_quantity != null)
+    .map((variation) => Number(variation.available_quantity))
+    .filter((quantity) => Number.isFinite(quantity));
+  return packageStocks.length ? Math.max(...packageStocks) : null;
 }
 
 function updateInvoiceSummary() {
@@ -64,6 +76,12 @@ function updateInvoiceSummary() {
   converted.innerHTML = needsUsdRate
     ? "<span>Converted invoice total (INR)</span><strong>Enter the live USD/INR rate</strong>"
     : `<span>Converted invoice total (INR)</span><strong>${inr(convertedTotalInr)}</strong>`;
+  if ($("vendor").value === "mouser") {
+    entered.innerHTML = `<span>Mouser invoice total (${currency})</span><strong>${money(invoiceTotal, currency)}</strong>`;
+    converted.innerHTML = needsUsdRate
+      ? "<span>Converted invoice total (INR)</span><strong>Enter the live USD/INR rate</strong>"
+      : `<span>Converted invoice total (INR)</span><strong>${inr(convertedTotalInr)}</strong>`;
+  }
   summary.appendChild(converted);
 }
 
@@ -85,7 +103,14 @@ function updateConversionPreview(row, line) {
   }
   const currency = $("invoiceCurrency").value;
   if (currency === "INR") {
-    preview.textContent = `Per unit in INR: ${inr(Number(line.unit_price))}`;
+    if ($("vendor").value === "mouser" && line.liveQuote?.currency === "USD") {
+      const rate = Number($("liveRate").value);
+      preview.textContent = Number.isFinite(rate) && rate > 0
+        ? `Live Mouser unit price in INR: ${inr(line.liveQuote.unit_price * rate * 1.02)}`
+        : "Enter the live USD/INR rate to show this Mouser price in INR.";
+    } else {
+      preview.textContent = `Per unit in INR: ${inr(Number(line.unit_price))}`;
+    }
     return;
   }
   const liveRate = Number($("liveRate").value);
@@ -94,15 +119,33 @@ function updateConversionPreview(row, line) {
     return;
   }
   const appliedRate = liveRate * 1.02;
+  if ($("vendor").value === "mouser" && line.liveQuote?.currency === "USD") {
+    preview.textContent = `Live Mouser unit price in USD: ${money(line.liveQuote.unit_price, "USD")}`;
+    return;
+  }
   preview.textContent =
     `Live rate ${liveRate.toFixed(4)} + 2% = ${appliedRate.toFixed(4)} INR/USD; per unit ${inr(Number(line.unit_price || line.liveQuote?.unit_price) * appliedRate)}`;
 }
 
 function updateLineAmount(row, line) {
-  const amount = lineInvoiceInr(line);
+  const isMouser = $("vendor").value === "mouser";
+  let amount = lineInvoiceInr(line);
+  if (isMouser) {
+    amount = lineInvoiceCurrency(line);
+    if (amount !== null && $("invoiceCurrency").value === "INR") {
+      const rate = Number($("liveRate").value);
+      amount = Number.isFinite(rate) && rate > 0 ? amount / (rate * 1.02) : null;
+    }
+  }
   const amountCell = row.querySelector("[data-line-amount]");
   if (!amountCell) return;
-  amountCell.textContent = amount === null ? "—" : inr(amount);
+  amountCell.dataset.label = isMouser ? "Amount (USD)" : "Amount (INR)";
+  amountCell.textContent = amount === null ? "\u2014" : isMouser ? money(amount, "USD") : inr(amount);
+}
+function lineInvoiceCurrency(line) {
+  const quantity = Number(line.quantity), unitPrice = Number(line.unit_price);
+  return Number.isFinite(quantity) && quantity > 0 && Number.isFinite(unitPrice) && unitPrice >= 0 && line.unit_price !== ""
+    ? Math.round((quantity * unitPrice + Number.EPSILON) * 100) / 100 : null;
 }
 function updateStockWarning(row, line) {
   const warning = row.querySelector(".stock-warning");
@@ -124,12 +167,13 @@ function renderLines() {
   state.lines.forEach((line, index) => {
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td data-label="MPN"><div class="mpn-search-row"><input class="mpn-input" data-field="mpn" aria-label="MPN" placeholder="Manufacturer part number" value="${escape(line.mpn || "")}"><button class="button button-secondary search-product" type="button" ${line.loading ? "disabled" : ""}>${line.loading ? '<span class="search-spinner" aria-hidden="true"></span> Searching' : "Search"}</button></div><small class="lookup-status" role="status" aria-live="polite">${line.loading ? '<span class="status-spinner" aria-hidden="true"></span>' : ""}${escape(line.lookupMessage || "")}</small>${line.needsMatchSelection ? `<select class="match-choice" aria-label="Select DigiKey product"><option value="">Choose a DigiKey match</option>${line.productDetails.matches.map((match, choice) => `<option value="${choice}" ${String(line.selectedMatchIndex) === String(choice) ? "selected" : ""}>${escape(match.manufacturer_part_number || "Unknown MPN")} / ${escape(match.manufacturer || "Unknown manufacturer")} / ${escape(match.variations[0]?.digikey_product_number || "No DigiKey part number")}</option>`).join("")}</select>` : ""}${line.selectedProduct ? `<div class="live-product-details"><span class="live-product-label">DIGIKEY PRODUCT DETAILS</span><dl><div><dt>Manufacturer</dt><dd>${escape(line.selectedProduct.manufacturer || "Not provided")}</dd></div><div><dt>Category</dt><dd>${escape(line.selectedProduct.category || (line.master?.found ? line.master.category : "Not found in catalog"))}</dd></div><div><dt>Description</dt><dd>${escape(line.selectedProduct.description || "Not provided")}</dd></div></dl></div>` : ""}</td>
+      <td data-label="MPN"><div class="mpn-search-row"><input class="mpn-input" data-field="mpn" aria-label="MPN" placeholder="Manufacturer part number" value="${escape(line.mpn || "")}"><button class="button button-secondary search-product" type="button" ${line.loading ? "disabled" : ""}>${line.loading ? '<span class="search-spinner" aria-hidden="true"></span> Searching' : "Search"}</button></div><small class="lookup-status" role="status" aria-live="polite">${line.loading ? '<span class="status-spinner" aria-hidden="true"></span>' : ""}${escape(line.lookupMessage || "")}</small>${line.needsMatchSelection ? `<select class="match-choice" aria-label="Select product"><option value="">Choose a ${$("vendor").value === "mouser" ? "Mouser" : "DigiKey"} match</option>${line.productDetails.matches.map((match, choice) => `<option value="${choice}" ${String(line.selectedMatchIndex) === String(choice) ? "selected" : ""}>${escape(match.manufacturer_part_number || "Unknown MPN")} / ${escape(match.manufacturer || "Unknown manufacturer")} / ${escape(match.variations?.[0]?.digikey_product_number || match.mouser_part_number || "Part number unavailable")}</option>`).join("")}</select>` : ""}${line.selectedProduct ? `<div class="live-product-details"><span class="live-product-label">${$("vendor").value === "mouser" ? "MOUSER" : "DIGIKEY"} PRODUCT DETAILS</span><dl><div><dt>Manufacturer</dt><dd>${escape(line.selectedProduct.manufacturer || "Not provided")}</dd></div><div><dt>Category</dt><dd>${escape(line.selectedProduct.category || (line.master?.found ? line.master.category : "Not found in catalog"))}</dd></div><div><dt>Description</dt><dd>${escape(line.selectedProduct.description || "Not provided")}</dd></div></dl></div>` : ""}</td>
       <td data-label="Quantity"><input data-field="quantity" aria-label="Quantity" type="number" min="0.000001" step="any" value="${escape(line.quantity ?? 1)}"><small class="stock-warning" role="alert"></small></td>
-      <td data-label="Amount (INR)" data-line-amount>â€”</td>
+      <td data-label="Amount (INR)" data-line-amount>—</td>
+      <td data-label="Available stock"><strong class="stock-total">${availableStock(line) === null ? "" : escape(availableStock(line).toLocaleString("en-IN"))}</strong></td>
       <td data-label="Per unit price">
-        <input data-field="unit_price" aria-label="Per unit price" type="number" min="0" step="any" value="${escape(line.unit_price ?? line.liveQuote?.unit_price ?? "")}">
-        ${line.liveQuote ? `<small class="live-price">${escape(line.selectedVariation?.package_type || "Package")} / MOQ ${escape(line.selectedVariation?.minimum_order_quantity || 1)} / DigiKey ${escape(line.liveQuote.digikey_product_number || "")} / tier ${escape(line.liveQuote.break_quantity)} / ${line.liveQuote.requested_quantity} x ${escape(money(line.liveQuote.unit_price, line.liveQuote.currency))} = ${escape(money(line.liveQuote.extended_price, line.liveQuote.currency))} / stock ${line.liveQuote.available_quantity == null ? "unavailable" : escape(line.liveQuote.available_quantity)} / ${line.quoteCached ? "cached" : "live"} from ${escape(line.fetchedAt || "")}${line.preserveImportedPrice ? ` / BOM price ${escape(money(line.uploadPrice, line.currency))}` : line.priceSource === "digikey" ? " / Auto-filled; editable" : ""}</small>` : line.pricingMessage ? `<small class="price-unavailable">${escape(line.pricingMessage)}</small>` : ""}
+        <input data-field="unit_price" aria-label="Per unit price (${ $("invoiceCurrency").value })" type="number" min="0" step="any" value="${escape(line.unit_price ?? (line.liveQuote?.currency === $("invoiceCurrency").value ? line.liveQuote.unit_price : line.liveQuote && $("vendor").value === "mouser" && $("invoiceCurrency").value === "INR" ? line.liveQuote.unit_price * (Number($("liveRate").value) || 0) * 1.02 : ""))}">
+        ${line.liveQuote ? `<small class="live-price">${escape(line.selectedVariation?.package_type || "Package")} / MOQ ${escape(line.selectedVariation?.minimum_order_quantity || 1)} / ${$("vendor").value === "mouser" ? "Mouser" : "DigiKey"} ${escape(line.liveQuote.digikey_product_number || line.liveQuote.mouser_part_number || "")} / tier ${escape(line.liveQuote.break_quantity)} / ${line.liveQuote.requested_quantity} x ${escape(money(line.liveQuote.unit_price, line.liveQuote.currency))} = ${escape(money(line.liveQuote.extended_price, line.liveQuote.currency))} / ${line.quoteCached ? "cached" : "live"} from ${escape(line.fetchedAt || "")}${line.preserveImportedPrice ? ` / BOM price ${escape(money(line.uploadPrice, line.currency))}` : line.priceSource === "digikey" ? " / Auto-filled; editable" : ""}</small>` : line.pricingMessage ? `<small class="price-unavailable">${escape(line.pricingMessage)}</small>` : ""}
         ${line.priceCurrencyMismatch ? `<small class="price-unavailable">Live price is ${escape(line.priceCurrencyMismatch.liveCurrency)}. Shipment uses ${escape(line.priceCurrencyMismatch.shipmentCurrency)}.</small>` : ""}
         <small data-conversion-preview></small>
       </td>
@@ -145,9 +189,16 @@ function renderLines() {
         if (field === "quantity" || field === "unit_price") {
           if (field === "quantity" && line.productDetails) {
             line.quoteCached = true;
-            applyDigiKeyTier(line, false);
-            const priceInput = tr.querySelector('[data-field="unit_price"]');
-            if (line.priceSource === "digikey") priceInput.value = line.unit_price;
+            if ($("vendor").value === "mouser") {
+              line.unit_price = "";
+              line.priceSource = "";
+              line.liveQuote = null;
+              line.pricingMessage = "Updating Mouser price for this quantity...";
+            } else {
+              applyDigiKeyTier(line, false);
+              const priceInput = tr.querySelector('[data-field="unit_price"]');
+              if (line.priceSource === "digikey") priceInput.value = line.unit_price;
+            }
           }
           updateConversionPreview(tr, line);
           updateLineAmount(tr, line);
@@ -155,10 +206,12 @@ function renderLines() {
           updateTariffAmounts();
         }
         if (field === "mpn") {
-          if (line.priceSource === "digikey") { line.unit_price = ""; line.priceSource = ""; }
+          if (line.priceSource === "digikey" || line.priceSource === "mouser") { line.unit_price = ""; line.priceSource = ""; }
           line.productDetails = null;
+          line.mouserProduct = null;
           line.liveQuote = null;
           line.lookupMessage = "";
+          line.pricingMessage = "";
           line.master = null;
           line.category = "";
           line.bcd = "";
@@ -172,8 +225,18 @@ function renderLines() {
     tr.querySelector('[data-field="mpn"]').addEventListener("change", () => {
       if (line.mpn.trim()) lookupProduct(index).catch((error) => showError(error.message));
     });
+    tr.querySelector('[data-field="mpn"]').addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && line.mpn.trim()) {
+        event.preventDefault();
+        lookupProduct(index).catch((error) => showError(error.message));
+      }
+    });
     tr.querySelector('[data-field="quantity"]').addEventListener("change", () => {
       if (!line.productDetails) return;
+      if ($("vendor").value === "mouser") {
+        lookupMouserProduct(line, line.mpn.trim()).catch((error) => showError(error.message));
+        return;
+      }
       line.quoteCached = true;
       applyDigiKeyTier(line, false);
       renderLines();
@@ -199,10 +262,28 @@ function renderLines() {
   renderTariffs();
 }
 function updatePriceSettings() {
+  const isMouser = $("vendor").value === "mouser";
+  const amountHeader = document.querySelector("thead th:nth-child(3)");
+  if (amountHeader) amountHeader.textContent = isMouser ? "Amount (USD $)" : "Amount (INR \u20b9)";
+  $("invoiceCurrency").disabled = false;
+  $("vendorNotice").classList.toggle("hidden", !isMouser);
+  $("assessmentHelp").textContent = isMouser
+    ? "Mouser accepts USD or INR invoice prices. Shipping is $20 below a $3,000 USD-equivalent shipment invoice and free at or above $3,000. INR invoices convert to USD using the entered rate for this threshold."
+    : "Insurance is 1.125% of invoice value. When total shipment invoice is below ?7,000, each line�s freight is (line invoice � total invoice) � ?1,200. At or above ?7,000, freight is zero. Assessable value is invoice + insurance + allocated freight; other charges are excluded from BCD assessment.";
+
   const isUsd = $("invoiceCurrency").value === "USD";
   $("liveRateWrap").classList.toggle("hidden", !isUsd);
   $("inrRateNote").classList.toggle("hidden", isUsd);
   state.lines.forEach((line, index) => {
+    if ($("vendor").value === "mouser" && line.liveQuote?.currency === "USD") {
+      const rate = Number($("liveRate").value);
+      line.unit_price = isUsd
+        ? String(line.liveQuote.unit_price)
+        : Number.isFinite(rate) && rate > 0
+          ? String(Math.round((line.liveQuote.unit_price * rate * 1.02 + Number.EPSILON) * 100) / 100)
+          : "";
+      line.currency = $("invoiceCurrency").value;
+    }
     const row = $("productRows").children[index];
     if (row) {
       updateConversionPreview(row, line);
@@ -213,6 +294,10 @@ function updatePriceSettings() {
   $("results").classList.add("hidden");
   updateInvoiceSummary();
   updateTariffAmounts();
+  state.lines.forEach((line, index) => {
+    const row = $("productRows").children[index];
+    if (row) updateLineAmount(row, line);
+  });
   if (state.upload) {
     refreshUploadedPricesForCurrency().catch((error) => showError(error.message));
   }
@@ -220,6 +305,47 @@ function updatePriceSettings() {
 
 async function refreshUploadedPricesForCurrency() {
   const currency = $("invoiceCurrency").value;
+  if ($("vendor").value === "mouser") {
+    await Promise.all(state.lines.filter((line) => line.mpn?.trim()).map(async (line) => {
+      line.loading = true;
+      line.lookupMessage = `Updating Mouser price in ${currency}...`;
+      renderLines();
+      try {
+        const response = await fetch(`/api/landing/v2/mouser-product/${encodeURIComponent(line.mpn.trim())}?quantity=${encodeURIComponent(line.quantity || 1)}`);
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || `Could not load Mouser price for ${line.mpn}.`);
+        const matches = data.matches || [];
+        const product = matches.find((match) => match.exact_mpn_match) || matches[0];
+        line.productDetails = { queried_mpn: line.mpn.trim(), query_currency: "USD", matches: product ? [product] : [] };
+        line.mouserProduct = product || null;
+        line.selectedProduct = product || null;
+        line.selectedVariation = product ? { available_quantity: product.available_quantity } : null;
+        line.liveQuote = product?.unit_price == null ? null : {
+          requested_quantity: Number(line.quantity), break_quantity: product.break_quantity,
+          unit_price: product.unit_price, extended_price: Number(line.quantity) * product.unit_price,
+          currency: "USD", available_quantity: product.available_quantity,
+          mouser_part_number: product.mouser_part_number
+        };
+        if (line.liveQuote) {
+          const rate = Number($("liveRate").value);
+          line.unit_price = currency === "USD" ? String(line.liveQuote.unit_price)
+            : Number.isFinite(rate) && rate > 0
+              ? String(Math.round((line.liveQuote.unit_price * rate * 1.02 + Number.EPSILON) * 100) / 100)
+              : "";
+          line.currency = currency;
+          line.priceSource = "mouser";
+        }
+        line.lookupMessage = product ? "Live Mouser price updated for invoice currency." : "No Mouser match found.";
+      } catch (error) {
+        line.priceLookupError = true;
+        line.lookupMessage = error.message;
+      } finally {
+        line.loading = false;
+      }
+    }));
+    renderLines();
+    return;
+  }
   const pending = state.lines.filter((line) => line.mpn?.trim() &&
     (line.productDetails?.query_currency !== currency ||
       (!line.liveQuote && !line.priceLookupError)));
@@ -273,6 +399,13 @@ async function refreshUploadedPricesForCurrency() {
   renderLines();
 }
 
+function lineInvoiceUsd(line) {
+  const quantity = Number(line.quantity);
+  const unitPrice = Number(line.unit_price);
+  if (!Number.isFinite(quantity) || !Number.isFinite(unitPrice)) return null;
+  return quantity * unitPrice;
+}
+
 function lineInvoiceInr(line) {
   const quantity = Number(line.quantity);
   const unitPrice = Number(line.unit_price);
@@ -295,8 +428,18 @@ function calculateAssessablePreview() {
   const totalInvoice = validInvoices.reduce((sum, amount) => sum + amount, 0);
   const section = $("assessableSection");
   const complete = invoices.length > 0 && invoices.every((amount) => amount !== null);
-  const freightTotal = complete && totalInvoice < Number(section.dataset.freeShippingThreshold)
-    ? Number(section.dataset.internationalFreight)
+  const mouser = $("vendor").value === "mouser";
+  const invoiceUsd = state.lines.reduce((sum, line) => sum + (lineInvoiceCurrency(line) || 0), 0);
+  const liveRate = Number($("liveRate").value);
+  const invoiceUsdEquivalent = $("invoiceCurrency").value === "USD"
+    ? invoiceUsd
+    : (liveRate > 0 ? totalInvoice / (liveRate * 1.02) : null);
+  const mouserFreightApplicable = !mouser || (invoiceUsdEquivalent !== null && invoiceUsdEquivalent < 3000);
+  const mouserFreightInr = 20 * (liveRate > 0 ? liveRate * 1.02 : 1);
+  const freightTotal = complete && (mouser
+    ? mouserFreightApplicable
+    : totalInvoice < Number(section.dataset.freeShippingThreshold))
+    ? (mouser ? Math.round((mouserFreightInr + Number.EPSILON) * 100) / 100 : Number(section.dataset.internationalFreight))
     : 0;
   const weights = totalInvoice > 0
     ? validInvoices
@@ -381,16 +524,16 @@ function updateTariffAmounts() {
         ? Math.round((bcdAmount * swsRate / 100 + Number.EPSILON) * 100) / 100
         : null);
     row.querySelector("[data-bcd-amount]").textContent =
-      bcdAmount === null ? "â€”" : inr(bcdAmount);
+      bcdAmount === null ? "—" : inr(bcdAmount);
     row.querySelector("[data-sws-amount]").textContent =
-      swsAmount === null ? "â€”" : inr(swsAmount);
+      swsAmount === null ? "—" : inr(swsAmount);
     row.querySelector("[data-invoice-inr]").textContent =
-      invoice === null ? "â€”" : inr(invoice);
+      invoice === null ? "—" : inr(invoice);
     row.querySelector("[data-insurance]").textContent =
-      insurance === null ? "â€”" : inr(insurance);
+      insurance === null ? "—" : inr(insurance);
     row.querySelector("[data-freight]").textContent = inr(lineFreight);
     row.querySelector("[data-assessable]").textContent =
-      assessable === null ? "â€”" : inr(assessable);
+      assessable === null ? "—" : inr(assessable);
   });
   updateAssessableSummary();
 }
@@ -422,24 +565,24 @@ function renderTariffs() {
         <label>HSN / CTSH<input data-master="hsn" aria-label="HSN or CTSH code" placeholder="${known ? "Not available" : "Enter HSN / CTSH"}" value="${escape(known ? line.master.hsn : (line.hsn || ""))}" ${known ? "readonly" : ""}></label>
       </div>
       <div class="tariff-metrics">
-        <div><span>Invoice value</span><strong data-invoice-inr>â€”</strong></div>
-        <div><span>Insurance</span><strong data-insurance>â€”</strong></div>
-        <div><span>Allocated freight</span><strong data-freight>â€”</strong></div>
-        <div class="assessable-metric"><span>Assessable value</span><strong data-assessable>â€”</strong></div>
+        <div><span>Invoice value</span><strong data-invoice-inr>—</strong></div>
+        <div><span>Insurance</span><strong data-insurance>—</strong></div>
+        <div><span>Allocated freight</span><strong data-freight>—</strong></div>
+        <div class="assessable-metric"><span>Assessable value</span><strong data-assessable>—</strong></div>
       </div>
       <div class="tariff-rates">
         <section class="rate-card bcd-rate-card">
           <div class="rate-title">Basic Customs Duty <small>BCD</small></div>
           <label class="rate-entry" for="tariff-bcd-${index}"><input id="tariff-bcd-${index}" data-master="bcd" aria-label="BCD percent" type="number" min="0" max="100" step="any" placeholder="Rate" value="${escape(bcd)}" ${known ? "readonly" : ""}><b>%</b></label>
-          <span class="rate-result-label">Duty amount</span><strong class="rate-result" data-bcd-amount>â€”</strong>
+          <span class="rate-result-label">Duty amount</span><strong class="rate-result" data-bcd-amount>—</strong>
         </section>
         <section class="rate-card sws-rate-card">
           <div class="rate-title">Social Welfare Surcharge <small>SWS</small></div>
           <label class="rate-entry" for="tariff-sws-${index}"><input id="tariff-sws-${index}" data-master="sws" aria-label="SWS percent" type="number" min="0" max="100" step="any" placeholder="Rate" value="${escape(sws)}" ${known ? "readonly" : ""}><b>%</b></label>
-          <span class="rate-result-label">Surcharge amount</span><strong class="rate-result" data-sws-amount>â€”</strong>
+          <span class="rate-result-label">Surcharge amount</span><strong class="rate-result" data-sws-amount>—</strong>
         </section>
       </div>
-      <footer class="tariff-card-footer"><small class="catalog-source">${known ? `Source: ${escape(line.master.source || "DigiKey master catalog")}` : "Save these details to reuse them on future lookups."}</small>${line.master?.found === false ? `<button class="button save-master" type="button" ${line.savingMaster ? "disabled" : ""}>${line.savingMaster ? "Saving…" : "Save to catalog"}</button>` : ""}</footer>
+      <footer class="tariff-card-footer"><small class="catalog-source">${known ? `Source: ${escape(line.master.source || "DigiKey master catalog")}` : "Save these details to reuse them on future lookups."}</small>${line.master?.found === false ? `<button class="button save-master" type="button" ${line.savingMaster ? "disabled" : ""}>${line.savingMaster ? "Saving�" : "Save to catalog"}</button>` : ""}</footer>
     `;
     row.querySelectorAll("[data-master]").forEach((input) => {
       input.addEventListener("input", () => {
@@ -517,6 +660,14 @@ function updateSelectedMatch(line) {
     ? line.productDetails?.matches?.[line.selectedMatchIndex] || null : null;
   line.needsMatchSelection = Boolean(line.productDetails?.matches?.length && !line.selectedProduct);
   if (!line.selectedProduct) { line.selectedVariation = null; line.needsVariationSelection = false; return; }
+  if ($("vendor").value === "mouser") {
+    line.selectedVariation = { available_quantity: line.selectedProduct.available_quantity };
+    line.selectedVariationIndex = 0;
+    line.needsVariationSelection = false;
+    line.cutTapePackageUnavailable = false;
+    line.liveCategory = line.master?.found ? line.master.category : "";
+    return;
+  }
   const variations = line.selectedProduct.variations
     .map((variation, variationIndex) => ({ variation, variationIndex }))
     .filter(({ variation }) => variation && typeof variation === "object");
@@ -606,6 +757,7 @@ async function lookupProduct(index) {
   const line = state.lines[index];
   if (!line || !line.mpn?.trim()) return;
   const mpn = line.mpn.trim();
+  if ($("vendor").value === "mouser") return lookupMouserProduct(line, mpn);
   const currency = $("invoiceCurrency").value;
   if (line.productDetails?.queried_mpn === mpn && line.productDetails?.query_currency === currency) {
     line.quoteCached = true;
@@ -664,6 +816,57 @@ async function lookupProduct(index) {
       line.loading = false;
       renderLines();
     }
+  }
+}
+
+async function lookupMouserProduct(line, mpn) {
+  const revision = (line.lookupRevision || 0) + 1;
+  line.lookupRevision = revision;
+  line.loading = true;
+  line.lookupMessage = "Searching Mouser live product data...";
+  renderLines();
+  try {
+    const [catalogResponse, liveResponse] = await Promise.all([
+      fetch(`/api/landing/v2/product/${encodeURIComponent(mpn)}`),
+      fetch(`/api/landing/v2/mouser-product/${encodeURIComponent(mpn)}?quantity=${encodeURIComponent(line.quantity || 1)}`)
+    ]);
+    const catalog = await catalogResponse.json();
+    const live = await liveResponse.json();
+    if (!catalogResponse.ok) throw new Error(catalog.error || "Product lookup failed.");
+    if (!liveResponse.ok) throw new Error(live.error || "Mouser product lookup failed.");
+    if (revision !== line.lookupRevision || line.mpn.trim() !== mpn) return;
+    line.master = catalog.found ? { ...catalog, found: true } : { found: false };
+    const matches = live.matches || [];
+    const exact = matches.filter((entry) => entry.exact_mpn_match);
+    const product = exact[0] || matches[0];
+    line.mouserProduct = product || null;
+    line.productDetails = { queried_mpn: mpn, query_currency: "USD", matches: product ? [product] : [] };
+    line.selectedProduct = product || null;
+    line.selectedVariation = product ? { available_quantity: product.available_quantity, minimum_order_quantity: null } : null;
+    line.selectedMatchIndex = product ? 0 : null;
+    line.selectedVariationIndex = product ? 0 : null;
+    line.liveQuote = product?.unit_price == null ? null : {
+      requested_quantity: Number(line.quantity), break_quantity: product.break_quantity,
+      unit_price: product.unit_price, extended_price: Number(line.quantity) * product.unit_price,
+      currency: "USD", available_quantity: product.available_quantity, mouser_part_number: product.mouser_part_number
+    };
+    line.fetchedAt = new Date().toLocaleTimeString();
+    line.priceSource = line.liveQuote ? "mouser" : "";
+    if (line.liveQuote) line.unit_price = String(line.liveQuote.unit_price);
+    line.lookupMessage = product ? "Mouser product found." : "MPN not found in Mouser.";
+    line.pricingMessage = product && !line.liveQuote ? "Mouser returned no USD price for this product." : "";
+    if (!line.liveQuote && line.priceSource === "mouser") {
+      line.unit_price = "";
+      line.priceSource = "";
+    }
+    if (catalog.found) {
+      line.catalogCategory = catalog.category; line.bcd = catalog.bcd;
+      line.sws = catalog.sws; line.hsn = catalog.hsn;
+    }
+    line.result = null;
+    renderLines(); renderTariffs();
+  } finally {
+    if (revision === line.lookupRevision) { line.loading = false; renderLines(); }
   }
 }
 
@@ -763,6 +966,7 @@ async function sendWorkbookImport(selection = {}) {
   const form = new FormData();
   form.append("file", file);
   form.append("default_currency", $("invoiceCurrency").value);
+  form.append("vendor", $("vendor").value);
   Object.entries(selection).forEach(([key, value]) => form.append(key, value));
   const uploadDetails = $("uploadDetails");
   uploadDetails.innerHTML = '<span class="status-spinner" aria-hidden="true"></span> Reading BOM and fetching live product prices...';
@@ -786,7 +990,8 @@ async function sendWorkbookImport(selection = {}) {
         productDetails: item.product_details || null,
         liveQuote: item.live_quote || null,
         preserveImportedPrice: true,
-        priceSource: item.live_quote?.currency === $("invoiceCurrency").value ? "digikey" : "upload",
+        priceSource: item.live_quote?.currency === $("invoiceCurrency").value
+          ? ($("vendor").value === "mouser" ? "mouser" : "digikey") : "upload",
         quoteCached: false,
         fetchedAt: item.product_details?.matches?.length ? new Date().toLocaleTimeString() : "",
       });
@@ -796,21 +1001,27 @@ async function sendWorkbookImport(selection = {}) {
       if (exact.length === 1) line.selectedMatchIndex = exact[0].matchIndex;
       else if (matches.length === 1) line.selectedMatchIndex = 0;
       updateSelectedMatch(line);
-      if (line.liveQuote && line.liveQuote.currency === $("invoiceCurrency").value) {
+      if ($("vendor").value === "mouser" && line.selectedProduct) {
+        line.mouserProduct = line.selectedProduct;
+        line.selectedVariation = { available_quantity: line.selectedProduct.available_quantity };
+      }
+      if ($("vendor").value === "digikey" && line.liveQuote && line.liveQuote.currency === $("invoiceCurrency").value) {
         line.unit_price = String(line.liveQuote.unit_price);
         line.priceSource = "digikey";
         line.currency = $("invoiceCurrency").value;
       }
+      const vendorName = $("vendor").value === "mouser" ? "Mouser" : "DigiKey";
       line.lookupMessage = matches.length
-        ? "Live DigiKey details and quantity pricing loaded automatically."
-        : (line.productDetails?.error || "Live DigiKey details unavailable; BOM price retained.");
+        ? `Live ${vendorName} details and quantity pricing loaded automatically.`
+        : (line.productDetails?.error || `Live ${vendorName} details unavailable; BOM price retained.`);
       return line;
     });
     $("columnChoices").replaceChildren();
     $("manualPanel").classList.add("hidden");
     $("excelPanel").classList.remove("hidden");
     renderLines();
-    uploadDetails.textContent = `Imported ${data.items.length} BOM line${data.items.length === 1 ? "" : "s"}. Live DigiKey details and quantity pricing loaded where available.`;
+    const vendorName = $("vendor").value === "mouser" ? "Mouser" : "DigiKey";
+    uploadDetails.textContent = `Imported ${data.items.length} BOM line${data.items.length === 1 ? "" : "s"}. Live ${vendorName} details and quantity pricing loaded where available.`;
   } catch (error) {
     showError(error.message);
     uploadDetails.textContent = "BOM import could not be completed.";
@@ -825,7 +1036,7 @@ function renderResults(data) {
   $("results").classList.remove("hidden");
   $("totals").classList.add("results-summary");
   $("resultSummary").textContent =
-    `${data.items.length} line item(s) â€¢ Shipment invoice ${inr(data.totals.total_invoice_inr)}`;
+    `${data.items.length} line item(s) • ${data.vendor === "mouser" ? "Mouser" : "DigiKey"} shipment invoice ${inr(data.totals.total_invoice_inr)}`;
   const totals = $("totals");
   totals.replaceChildren();
   const totalDuties = data.items.reduce(
@@ -884,7 +1095,7 @@ function renderResults(data) {
             <dt>Unit price</dt><dd>${money(item.unit_price, item.currency)}</dd>
             <dt>Invoice total (entered currency)</dt><dd>${money(item.line_invoice_currency, item.currency)}</dd>
             <dt>Exchange rate</dt><dd>${item.live_exchange_rate_inr === null ? "Not applicable" : `${item.live_exchange_rate_inr.toFixed(4)} INR/USD live`}; applied ${item.exchange_rate_inr.toFixed(4)} INR/${escape(item.currency)}</dd>
-            <dt>Category / HSN</dt><dd>${escape(item.category || "â€”")} / ${escape(item.hsn || "â€”")}</dd>
+            <dt>Category / HSN</dt><dd>${escape(item.category || "—")} / ${escape(item.hsn || "—")}</dd>
             <dt>Insurance</dt><dd>${inr(item.insurance)}</dd>
             <dt>International freight</dt><dd>${inr(item.international_freight)}</dd>
             <dt>Other charges</dt><dd>${inr(item.other_charges)}</dd>
@@ -911,10 +1122,24 @@ async function calculate() {
   }
   const button = $("calculate");
   button.disabled = true;
-  button.textContent = "Calculatingâ€¦";
+  button.textContent = "Calculating…";
   try {
+    const vendor = $("vendor").value;
     for (const line of state.lines) {
       if (!line.mpn?.trim()) throw new Error("Enter an MPN for every product line.");
+      if (vendor === "mouser") {
+        if (!line.mouserProduct || !line.liveQuote) throw new Error(`Search Mouser for ${line.mpn} and confirm a price before calculating.`);
+        if ($("invoiceCurrency").value === "USD") {
+          line.unit_price = String(line.liveQuote.unit_price);
+        } else {
+          const rate = Number($("liveRate").value);
+          if (!Number.isFinite(rate) || rate <= 0) {
+            throw new Error("Enter the live interbank USD/INR exchange rate to show the Mouser price in INR.");
+          }
+          line.unit_price = String(Math.round((line.liveQuote.unit_price * rate * 1.02 + Number.EPSILON) * 100) / 100);
+        }
+        continue;
+      }
       if (!line.productDetails) throw new Error(`Search DigiKey for ${line.mpn} before calculating.`);
       if (line.needsMatchSelection) throw new Error(`Select the DigiKey match for ${line.mpn}.`);
       if (!line.selectedVariation) throw new Error(`${line.mpn}: DigiKey did not return a package variation.`);
@@ -932,6 +1157,7 @@ async function calculate() {
       line.quoteCached = true;
     }
     const payload = {
+      vendor,
       items: state.lines.map((line) => ({
         mpn: line.mpn,
         quantity: line.quantity,
@@ -990,9 +1216,30 @@ $("addLine").addEventListener("click", () => {
 });
 $("invoiceCurrency").addEventListener("change", updatePriceSettings);
 $("vendor").addEventListener("change", () => {
-  const isOtherVendor = $("vendor").value === "other";
-  $("vendorNotice").classList.toggle("hidden", !isOtherVendor);
+  const isMouser = $("vendor").value === "mouser";
+  $("invoiceCurrency").disabled = false;
+  $("vendorNotice").classList.toggle("hidden", !isMouser);
+  state.lines.forEach((line) => {
+    const previousPriceSource = line.priceSource;
+    line.result = null;
+    line.liveQuote = null;
+    line.mouserProduct = null;
+    line.productDetails = null;
+    line.selectedProduct = null;
+    line.selectedVariation = null;
+    line.priceSource = "";
+    line.lookupMessage = "";
+    if (previousPriceSource === "digikey" || previousPriceSource === "mouser") line.unit_price = "";
+  });
   $("results").classList.add("hidden");
+  updatePriceSettings(); renderLines(); renderTariffs();
+  if (state.upload) {
+    refreshUploadedPricesForCurrency().catch((error) => showError(error.message));
+  } else {
+    state.lines.forEach((line, index) => {
+      if (line.mpn?.trim()) lookupProduct(index).catch((error) => showError(error.message));
+    });
+  }
 });
 $("liveRate").addEventListener("input", updatePriceSettings);
 $("otherChargesTotal").addEventListener("input", () => {

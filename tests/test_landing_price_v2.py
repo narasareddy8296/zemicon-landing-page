@@ -110,6 +110,23 @@ class LandingPriceV2Tests(unittest.TestCase):
         self.assertIs(select_package_variation([reel, cut_tape]), cut_tape)
         self.assertIsNone(select_package_variation([]))
 
+    def test_digikey_total_stock_falls_back_to_vendor_package_quantity(self):
+        from services.landing_price_v2.digikey_api import _parse_product
+
+        parsed = _parse_product({
+            "ManufacturerProductNumber": "ABC123",
+            "ProductVariations": [
+                {"QuantityAvailableforPackageType": 0},
+                {"QuantityAvailableforPackageType": 250},
+            ],
+        }, "USD", "ABC123")
+        self.assertEqual(parsed["available_quantity"], 250)
+
+    def test_mouser_stock_can_be_parsed_from_vendor_availability_text(self):
+        from services.landing_price_v2.mouser_api import _available_quantity
+
+        self.assertEqual(_available_quantity({"Availability": "12,345 In Stock"}), 12345)
+
     def test_digikey_customer_tier_falls_back_to_standard_if_unusable(self):
         from services.landing_price_v2.digikey_api import _parse_variation
 
@@ -324,6 +341,76 @@ class LandingPriceV2Tests(unittest.TestCase):
         self.assertEqual(result["items"][0]["line_invoice_inr"], 7140)
         self.assertEqual(result["totals"]["total_invoice_inr"], 7140)
         self.assertEqual(result["totals"]["international_freight"], 0)
+
+    def test_mouser_usd_shipping_threshold_and_conversion(self):
+        below = self.calculate(
+            [{"mpn": "PASSIVE1", "quantity": 1, "unit_price": 2999, "currency": "USD", "live_exchange_rate": 100}],
+            vendor="mouser",
+        ).get_json()
+        self.assertEqual(below["vendor"], "mouser")
+        self.assertEqual(below["totals"]["international_freight"], 2040)
+        self.assertEqual(below["items"][0]["international_freight"], 2040)
+
+        at_threshold = self.calculate(
+            [{"mpn": "PASSIVE1", "quantity": 1, "unit_price": 3000, "currency": "USD", "live_exchange_rate": 100}],
+            vendor="mouser",
+        ).get_json()
+        self.assertEqual(at_threshold["totals"]["international_freight"], 0)
+
+    def test_mouser_accepts_inr_invoice_and_uses_usd_equivalent_shipping_threshold(self):
+        response = self.calculate(
+            [{"mpn": "PASSIVE1", "quantity": 1, "unit_price": 1000, "currency": "INR", "live_exchange_rate": 100}],
+            vendor="mouser",
+        )
+        result = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(result["items"][0]["currency"], "INR")
+        self.assertEqual(result["items"][0]["line_invoice_inr"], 1000)
+        self.assertEqual(result["totals"]["international_freight"], 2040)
+
+        missing_rate = self.calculate(
+            [{"mpn": "PASSIVE1", "quantity": 1, "unit_price": 1000, "currency": "INR"}],
+            vendor="mouser",
+        )
+        self.assertEqual(missing_rate.status_code, 400)
+        self.assertIn("exchange rate", missing_rate.get_json()["error"])
+
+    def test_mouser_inr_at_usd_equivalent_threshold_gets_free_shipping(self):
+        result = self.calculate(
+            [{"mpn": "PASSIVE1", "quantity": 1, "unit_price": 306000, "currency": "INR", "live_exchange_rate": 100}],
+            vendor="mouser",
+        ).get_json()
+        self.assertEqual(result["totals"]["international_freight"], 0)
+
+    @patch("services.landing_price_v2.mouser_api.requests.post")
+    def test_mouser_search_uses_search_key_and_v1_part_request(self, post):
+        class FakeResponse:
+            status_code = 200
+            ok = True
+
+            @staticmethod
+            def json():
+                return {"SearchResults": {"Parts": [{
+                    "ManufacturerPartNumber": "KLZ1608MHR100WTD25",
+                    "MouserPartNumber": "81-KLZ1608MHR100WTD25",
+                    "Manufacturer": "Murata",
+                    "AvailabilityInStock": "12,345",
+                    "PriceBreaks": [{"Quantity": 1, "Price": "$0.10"}],
+                }]}}
+
+        post.return_value = FakeResponse()
+        with self.app.app_context():
+            self.app.config["MOUSER_SEARCH_API_KEY"] = "test-search-key"
+            from services.landing_price_v2.mouser_api import lookup_product_details
+
+            matches = lookup_product_details("KLZ1608MHR100WTD25", 1)
+
+        self.assertEqual(matches[0]["unit_price"], 0.1)
+        self.assertEqual(matches[0]["available_quantity"], 12345)
+        args, kwargs = post.call_args
+        self.assertTrue(args[0].endswith("/search/partnumber"))
+        self.assertEqual(kwargs["params"], {"apiKey": "test-search-key"})
+        self.assertEqual(kwargs["json"]["SearchByPartRequest"]["mouserPartNumber"], "KLZ1608MHR100WTD25")
 
     def test_usd_live_rate_gets_two_percent_and_inr_does_not(self):
         usd = self.calculate(
@@ -549,6 +636,43 @@ class LandingPriceV2Tests(unittest.TestCase):
         self.assertEqual(item["unit_price"], 2.5)  # BOM value is preserved.
         lookup.assert_called_once_with("ABC123", requested_currency="USD")
 
+    @patch("services.landing_price_v2.routes.lookup_mouser_product_details")
+    def test_excel_import_uses_mouser_api_when_mouser_is_selected(self, lookup):
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.append(["MPN", "Unit Price", "Quantity"])
+        sheet.append(["ABC123", 2.5, 4])
+        contents = io.BytesIO()
+        workbook.save(contents)
+        workbook.close()
+        lookup.return_value = [{
+            "manufacturer_part_number": "ABC123",
+            "manufacturer": "Example Manufacturer",
+            "description": "Example component",
+            "mouser_part_number": "M-ABC123",
+            "exact_mpn_match": True,
+            "unit_price": 2.0,
+            "break_quantity": 1,
+            "currency": "USD",
+            "available_quantity": 40,
+        }]
+
+        response = self.client.post(
+            "/api/landing/v2/import-excel",
+            data={
+                "vendor": "mouser",
+                "file": (io.BytesIO(contents.getvalue()), "purchase.xlsx"),
+            },
+            content_type="multipart/form-data",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        item = response.get_json()["items"][0]
+        self.assertEqual(item["product_details"]["matches"][0]["mouser_part_number"], "M-ABC123")
+        self.assertEqual(item["live_quote"]["unit_price"], 2.0)
+        self.assertEqual(item["live_quote"]["available_quantity"], 40)
+        lookup.assert_called_once_with("ABC123", 4)
+
     def test_excel_import_rejects_currencies_other_than_usd_or_inr(self):
         workbook = Workbook()
         sheet = workbook.active
@@ -613,15 +737,20 @@ class LandingPriceV2Tests(unittest.TestCase):
         self.assertEqual(page.status_code, 200)
         self.assertIn(b"Zemicon | Landing Price Calculator", page.data)
         self.assertIn(b'<option value="digikey" selected>DigiKey</option>', page.data)
-        self.assertIn(b'<option value="other">Other</option>', page.data)
+        self.assertIn(b'<option value="mouser">Mouser</option>', page.data)
+        self.assertIn(b'class="header-vendor" for="vendor"', page.data)
+        self.assertEqual(page.data.count(b'id="vendor"'), 1)
         self.assertIn(b'id="invoiceCurrency"', page.data)
         self.assertIn(b'id="liveRate"', page.data)
         self.assertNotIn(b'<th>Currency</th>', page.data)
         self.assertNotIn(b'<th>Live interbank USD/INR rate</th>', page.data)
-        self.assertIn(b'<th>Amount (INR \xe2\x82\xb9)</th>', page.data)
+        self.assertIn('<th>Amount (INR ?)</th>'.encode(), page.data)
+        self.assertIn(b'<th>Available stock</th>', page.data)
         self.assertIn(b'id="invoiceSummary"', page.data)
         self.assertIn(b'id="tariffsSection"', page.data)
         self.assertIn(b'id="tariffRows"', page.data)
+        self.assertIn(b'id="assessmentHelp"', page.data)
+        self.assertIn(b'$20', page.data)
         self.assertLess(
             page.data.index(b'id="invoiceSummary"'),
             page.data.index(b'id="tariffsSection"'),

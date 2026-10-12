@@ -15,6 +15,7 @@ from .excel_import import (
     normalize_upload,
 )
 from .master_lookup import add_master_records, list_master_records, lookup_mpn
+from .mouser_api import lookup_product_details as lookup_mouser_product_details
 
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
@@ -76,6 +77,22 @@ def digikey_product_lookup(mpn):
         current_app.logger.exception("DigiKey product lookup failed")
         return jsonify({"ok": False, "error": "DigiKey product lookup is temporarily unavailable."}), 502
     return jsonify({"found": bool(result["matches"]), "mpn": normalized_mpn, **result})
+
+
+@landing_v2.get("/api/landing/v2/mouser-product/<path:mpn>")
+def mouser_product_lookup(mpn):
+    normalized_mpn = " ".join(mpn.split())
+    if not normalized_mpn:
+        return jsonify({"found": False, "mpn": ""})
+    try:
+        matches = lookup_mouser_product_details(normalized_mpn, request.args.get("quantity", 1))
+    except DigiKeyAPIError as exc:
+        current_app.logger.warning("Mouser product lookup failed: %s", exc)
+        return jsonify({"ok": False, "error": str(exc)}), exc.status_code
+    except Exception:
+        current_app.logger.exception("Mouser product lookup failed")
+        return jsonify({"ok": False, "error": "Mouser product lookup is temporarily unavailable."}), 502
+    return jsonify({"found": bool(matches), "mpn": normalized_mpn, "matches": matches})
 
 
 @landing_v2.post("/api/landing/v2/master")
@@ -142,6 +159,9 @@ def import_excel():
             selection[key] = value
     if request.form.get("default_currency"):
         selection["default_currency"] = request.form["default_currency"].strip().upper()
+    vendor = request.form.get("vendor", "digikey").strip().casefold()
+    if vendor not in {"digikey", "mouser"}:
+        return jsonify({"ok": False, "error": "Choose DigiKey or Mouser as the vendor."}), 400
 
     try:
         workbook_stream = normalize_upload(upload.stream, upload.filename)
@@ -168,34 +188,48 @@ def import_excel():
                 if product
                 else {"found": False}
             )
-            # Excel uploads need the same live catalog details as the manual
-            # Search action. Keep the BOM's entered price/currency intact;
-            # the client uses these matches to display live package pricing.
+            # Use the selected vendor's catalog API; keep uploaded prices intact.
             try:
-                live = lookup_product_details(item["mpn"], requested_currency=item["currency"])
-                item["product_details"] = live
-                matches = live.get("matches") or []
-                exact = [match for match in matches if match.get("exact_mpn_match")]
-                selected = exact[0] if len(exact) == 1 else (matches[0] if len(matches) == 1 else None)
-                variations = (selected or {}).get("variations") or []
-                variation = min(
-                    variations,
-                    key=lambda entry: entry.get("minimum_order_quantity") or 0,
-                    default=None,
-                )
-                if variation:
-                    requested_quantity = max(1, int(float(item["quantity"])))
-                    tier = select_price_tier(variation.get("pricing_tiers"), requested_quantity)
-                    if tier:
+                requested_quantity = max(1, int(float(item["quantity"])))
+                if vendor == "mouser":
+                    matches = lookup_mouser_product_details(item["mpn"], requested_quantity)
+                    item["product_details"] = {"matches": matches, "currency": "USD"}
+                    exact = [match for match in matches if match.get("exact_mpn_match")]
+                    selected = exact[0] if len(exact) == 1 else (matches[0] if len(matches) == 1 else None)
+                    if selected and selected.get("unit_price") is not None:
                         item["live_quote"] = {
-                            "digikey_product_number": variation.get("digikey_product_number"),
+                            "mouser_part_number": selected.get("mouser_part_number"),
                             "requested_quantity": requested_quantity,
-                            "break_quantity": tier["break_quantity"],
-                            "unit_price": tier["unit_price"],
-                            "extended_price": requested_quantity * tier["unit_price"],
-                            "currency": tier["currency"],
-                            "available_quantity": variation.get("available_quantity"),
+                            "break_quantity": selected.get("break_quantity"),
+                            "unit_price": selected["unit_price"],
+                            "extended_price": requested_quantity * selected["unit_price"],
+                            "currency": "USD",
+                            "available_quantity": selected.get("available_quantity"),
                         }
+                else:
+                    live = lookup_product_details(item["mpn"], requested_currency=item["currency"])
+                    item["product_details"] = live
+                    matches = live.get("matches") or []
+                    exact = [match for match in matches if match.get("exact_mpn_match")]
+                    selected = exact[0] if len(exact) == 1 else (matches[0] if len(matches) == 1 else None)
+                    variations = (selected or {}).get("variations") or []
+                    variation = min(
+                        variations,
+                        key=lambda entry: entry.get("minimum_order_quantity") or 0,
+                        default=None,
+                    )
+                    if variation:
+                        tier = select_price_tier(variation.get("pricing_tiers"), requested_quantity)
+                        if tier:
+                            item["live_quote"] = {
+                                "digikey_product_number": variation.get("digikey_product_number"),
+                                "requested_quantity": requested_quantity,
+                                "break_quantity": tier["break_quantity"],
+                                "unit_price": tier["unit_price"],
+                                "extended_price": requested_quantity * tier["unit_price"],
+                                "currency": tier["currency"],
+                                "available_quantity": variation.get("available_quantity"),
+                            }
             except DigiKeyAPIError as exc:
                 # A catalog outage should not discard an otherwise readable BOM.
                 item["product_details"] = {"matches": [], "error": str(exc)}

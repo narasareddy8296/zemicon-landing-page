@@ -71,6 +71,9 @@ def _allocate(amount, weights):
 
 
 def calculate_landing_price(payload, config):
+    vendor = str(payload.get("vendor", "digikey") or "digikey").strip().casefold()
+    if vendor not in {"digikey", "mouser"}:
+        raise ValueError("Choose DigiKey or Mouser as the vendor.")
     items = payload.get("items")
     if not isinstance(items, list) or not items:
         raise ValueError("At least one line item is required.")
@@ -88,8 +91,17 @@ def calculate_landing_price(payload, config):
         if currency not in SUPPORTED_CURRENCIES:
             raise ValueError(f"Unsupported currency '{currency}' for {mpn}. Choose USD or INR.")
         if currency == "INR":
+            raw_rate = item.get("live_exchange_rate") if vendor == "mouser" else None
+            if vendor == "mouser" and raw_rate not in (None, ""):
+                live_exchange_rate = _decimal(
+                    raw_rate,
+                    "Live interbank USD/INR exchange rate",
+                    minimum=Decimal("0"),
+                    allow_zero=False,
+                )
+            else:
+                live_exchange_rate = None
             exchange_rate = Decimal("1")
-            live_exchange_rate = None
         else:
             raw_rate = item.get("live_exchange_rate")
             if raw_rate in (None, ""):
@@ -109,7 +121,7 @@ def calculate_landing_price(payload, config):
                 item.get("sws_rate", DEFAULT_SWS_RATE),
                 f"SWS rate for {mpn}",
             )
-            source = "Manually entered (MPN not in DigiKey master)"
+            source = f"Manually entered (MPN not in {vendor.title()} master)"
             hsn_code = " ".join(str(item.get("hsn", item.get("hsn_code", "")) or "").split())
         else:
             category = product["category"]
@@ -142,12 +154,54 @@ def calculate_landing_price(payload, config):
     if total_invoice <= 0:
         allocation_weights = [line["quantity"] for line in lines]
 
-    threshold = Decimal(config["DIGIKEY_FREE_SHIPPING_THRESHOLD_INR"])
-    international_freight = (
-        Decimal(config["DIGIKEY_INTERNATIONAL_FREIGHT_INR"])
-        if total_invoice < threshold
-        else Decimal("0")
-    )
+    if vendor == "mouser":
+        if any(line["currency"] == "INR" for line in lines) and any(
+            line["live_exchange_rate_inr"] is None for line in lines
+        ):
+            raise ValueError("Enter the live interbank USD/INR exchange rate to price Mouser invoices in INR.")
+        usd_lines = [line for line in lines if line["currency"] == "USD"]
+        live_rate = usd_lines[0]["live_exchange_rate_inr"] if usd_lines else None
+        if live_rate is None:
+            live_rate = next(
+                (line["live_exchange_rate_inr"] for line in lines if line["live_exchange_rate_inr"] is not None),
+                None,
+            )
+        if any(line["live_exchange_rate_inr"] != live_rate for line in usd_lines):
+            raise ValueError("Use one USD/INR exchange rate for the entire Mouser shipment.")
+        threshold = (
+            Decimal("3000") * (live_rate or Decimal("1")) * USD_RATE_ADJUSTMENT
+            if live_rate is not None
+            else Decimal("3000")
+        )
+        total_invoice_usd = sum(
+            (
+                line["line_invoice_currency"]
+                if line["currency"] == "USD"
+                else (
+                    line["line_invoice_inr"] / (live_rate * USD_RATE_ADJUSTMENT)
+                    if live_rate is not None
+                    else Decimal("0")
+                )
+                for line in lines
+            ),
+            Decimal("0"),
+        )
+        international_freight = (
+            (
+                Decimal("20") * live_rate * USD_RATE_ADJUSTMENT
+                if live_rate is not None
+                else Decimal("20")
+            )
+            if total_invoice_usd < Decimal("3000")
+            else Decimal("0")
+        )
+    else:
+        threshold = Decimal(config["DIGIKEY_FREE_SHIPPING_THRESHOLD_INR"])
+        international_freight = (
+            Decimal(config["DIGIKEY_INTERNATIONAL_FREIGHT_INR"])
+            if total_invoice < threshold
+            else Decimal("0")
+        )
     remittance = (
         Decimal(config["REMITTANCE_CHARGE_INR"])
         if _bool(payload.get("remittance_applicable", False), "Remittance applicability")
@@ -329,6 +383,7 @@ def calculate_landing_price(payload, config):
     return {
         "ok": True,
         "currency": "INR",
+        "vendor": vendor,
         "shipment_charges": {
             **{key: float(value) for key, value in shipment_charges.items()},
             "insurance": float(totals["insurance"]),

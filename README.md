@@ -69,7 +69,7 @@ The initial master workbook is `static/digikey-1.xlsx`. On first use, the calcul
 
 The calculator accepts `.xlsx`, `.xls`, `.csv`, `.tsv`, `.txt`, and text-based `.pdf` purchase lists up to 10 MB. It searches for MPN, unit-price, and quantity columns and asks for a selection when the file's layout is ambiguous. Total/extended-price columns are not interpreted as unit prices; quantity defaults to 1 if missing. Scanned image-only PDFs require OCR and should be exported to CSV or Excel before upload. The shipment currency and USD exchange rate selected on the page apply to all imported rows.
 
-The operational DigiKey master can be downloaded using **Export DigiKey master**.
+The operational DigiKey master can be downloaded using **Export DigiKey master**. Mouser uses the same tariff master and duty calculation. Configure the Search API key as `MOUSER_SEARCH_API_KEY` (or `search_api_key`) on the server and optionally set `MOUSER_BASE_URL` (or `mouser_base_url`; defaults to `https://api.mouser.com/api/v1`). Mouser accepts USD or INR invoice prices. Shipping is $20 below a $3,000 USD-equivalent shipment invoice and free at or above $3,000. The existing USD/INR rate adjustment is applied to convert invoice and shipping values to INR.
 
 ### Live DigiKey part details
 
@@ -83,6 +83,7 @@ To show manufacturer, category, product description, and DigiKey pricing after e
 | `GET /api/landing/v2/config` | List available currencies and active charge configuration. |
 | `GET /api/landing/v2/product/<mpn>` | Look up an MPN in the operational DigiKey master. |
 | `GET /api/landing/v2/digikey-product/<mpn>` | Look up manufacturer, category, and description through DigiKey Product Information API. |
+| `GET /api/landing/v2/mouser-product/<mpn>` | Look up Mouser product and USD price through the Mouser Search API. |
 | `POST /api/landing/v2/import-excel` | Preview an uploaded `.xlsx` workbook; submit column selections when requested. |
 | `POST /api/landing/v2/calculate` | Calculate line landing prices using master data and shipment rules. |
 | `POST /api/landing/v2/master` | Add missing product tariff records; existing MPNs are unchanged. |

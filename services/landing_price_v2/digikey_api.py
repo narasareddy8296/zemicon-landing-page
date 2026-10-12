@@ -49,7 +49,11 @@ def _number(value):
 
 def _integer(value):
     try:
-        return int(value) if value is not None else None
+        if value is None:
+            return None
+        if isinstance(value, str):
+            value = value.replace(",", "").strip()
+        return int(float(value))
     except (TypeError, ValueError):
         return None
 
@@ -187,6 +191,15 @@ def _parse_product(product, currency, requested_mpn):
     manufacturer_mpn = str(product.get("ManufacturerProductNumber") or "")
     normalize = lambda value: "".join(str(value).casefold().split())
     description = product.get("Description")
+    variations = [_parse_variation(item, currency) for item in _list(product.get("ProductVariations"))]
+    available_quantity = _integer(product.get("QuantityAvailable"))
+    if available_quantity is None:
+        package_quantities = [
+            variation["available_quantity"]
+            for variation in variations
+            if variation["available_quantity"] is not None
+        ]
+        available_quantity = max(package_quantities) if package_quantities else None
     details = {
         "manufacturer_part_number": manufacturer_mpn,
         "manufacturer": _named(product.get("Manufacturer")),
@@ -195,8 +208,8 @@ def _parse_product(product, currency, requested_mpn):
         "detailed_description": _value(description, "DetailedDescription") if isinstance(description, dict) else None,
         "category": _named(product.get("Category")),
         "currency": currency,
-        "available_quantity": _integer(product.get("QuantityAvailable")),
-        "variations": [_parse_variation(item, currency) for item in _list(product.get("ProductVariations"))],
+        "available_quantity": available_quantity,
+        "variations": variations,
         "exact_mpn_match": normalize(manufacturer_mpn) == normalize(requested_mpn),
     }
     return details
