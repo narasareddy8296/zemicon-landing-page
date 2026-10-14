@@ -56,7 +56,7 @@
       </div>
 
       <div class="price-settings">
-        <p id="vendorNotice" class="helper hidden" role="status" aria-live="polite">Mouser supports USD or INR invoices. Shipping is $20 below a $3,000 USD-equivalent invoice and free at or above $3,000.</p>
+        <p id="vendorNotice" class="helper hidden" role="status" aria-live="polite">Mouser accepts USD or INR invoices. Freight is ₹1,200 when selected.</p>
         <label for="invoiceCurrency">Invoice currency (applies to all lines)
           <select id="invoiceCurrency">
             <option value="USD" selected>USD</option>
@@ -97,6 +97,9 @@
         <p id="assessmentHelp">Insurance is 1.125% of invoice value. When total shipment invoice is below ₹7,000, each line’s freight is (line invoice ÷ total invoice) × ₹1,200. At or above ₹7,000, freight is zero. Assessable value is invoice + insurance + allocated freight; other charges are excluded from BCD assessment.</p>
         </div>
       </div>
+      <label id="vendorFreightWrap" for="vendorFreight">Add DigiKey freight (INR ₹1,200)?
+        <select id="vendorFreight"><option value="no" selected>No</option><option value="yes">Yes</option></select>
+      </label>
       <div class="assessment-summary" aria-live="polite">
         <div class="assessment-card"><span>Invoice value (INR)</span><strong id="assessmentInvoice">—</strong></div>
         <div class="assessment-card"><span>Insurance (1.125%)</span><strong id="assessmentInsurance">—</strong></div>

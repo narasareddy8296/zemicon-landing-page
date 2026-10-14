@@ -86,7 +86,7 @@ def initialize_database(connection):
     seeded = connection.execute(
         "SELECT value FROM landing_v2_metadata WHERE key = 'master_seeded'"
     ).fetchone()
-    if seeded:
+    if seeded and seeded["value"] == "2":
         return
 
     master_path = _master_path()
@@ -108,7 +108,8 @@ def initialize_database(connection):
 
     with connection:
         connection.execute(
-            "INSERT INTO landing_v2_metadata (key, value) VALUES ('master_seeded', '1')"
+            "INSERT INTO landing_v2_metadata (key, value) VALUES ('master_seeded', '2') "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value"
         )
 
 

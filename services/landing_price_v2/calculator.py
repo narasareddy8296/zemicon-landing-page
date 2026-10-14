@@ -187,19 +187,19 @@ def calculate_landing_price(payload, config):
             Decimal("0"),
         )
         international_freight = (
-            (
-                Decimal("20") * live_rate * USD_RATE_ADJUSTMENT
-                if live_rate is not None
-                else Decimal("20")
+            Decimal(config["DIGIKEY_INTERNATIONAL_FREIGHT_INR"])
+            if total_invoice_usd < Decimal("3000") and _bool(
+                payload.get("mouser_freight_applicable", False), "Mouser freight applicability"
             )
-            if total_invoice_usd < Decimal("3000")
             else Decimal("0")
         )
     else:
         threshold = Decimal(config["DIGIKEY_FREE_SHIPPING_THRESHOLD_INR"])
         international_freight = (
             Decimal(config["DIGIKEY_INTERNATIONAL_FREIGHT_INR"])
-            if total_invoice < threshold
+            if total_invoice < threshold and _bool(
+                payload.get("mouser_freight_applicable", False), "DigiKey freight applicability"
+            )
             else Decimal("0")
         )
     remittance = (

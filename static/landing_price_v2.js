@@ -267,9 +267,11 @@ function updatePriceSettings() {
   if (amountHeader) amountHeader.textContent = isMouser ? "Amount (USD $)" : "Amount (INR \u20b9)";
   $("invoiceCurrency").disabled = false;
   $("vendorNotice").classList.toggle("hidden", !isMouser);
+  $("vendorFreightWrap").classList.remove("hidden");
+  $("vendorFreight").closest("label").firstChild.textContent = `Add ${isMouser ? "Mouser" : "DigiKey"} freight (INR \u20b91,200)?`;
   $("assessmentHelp").textContent = isMouser
-    ? "Mouser accepts USD or INR invoice prices. Shipping is $20 below a $3,000 USD-equivalent shipment invoice and free at or above $3,000. INR invoices convert to USD using the entered rate for this threshold."
-    : "Insurance is 1.125% of invoice value. When total shipment invoice is below ?7,000, each line’s freight is (line invoice ÷ total invoice) × ?1,200. At or above ?7,000, freight is zero. Assessable value is invoice + insurance + allocated freight; other charges are excluded from BCD assessment.";
+    ? "Mouser accepts USD or INR invoice prices. Selected freight is INR \u20b91,200 when shipment is below USD 3,000 equivalent."
+    : "Select whether to add INR \u20b91,200 freight when the shipment invoice is below INR 7,000. Assessable value is invoice + insurance + allocated freight; other charges are excluded from BCD assessment.";
 
   const isUsd = $("invoiceCurrency").value === "USD";
   $("liveRateWrap").classList.toggle("hidden", !isUsd);
@@ -435,11 +437,12 @@ function calculateAssessablePreview() {
     ? invoiceUsd
     : (liveRate > 0 ? totalInvoice / (liveRate * 1.02) : null);
   const mouserFreightApplicable = !mouser || (invoiceUsdEquivalent !== null && invoiceUsdEquivalent < 3000);
-  const mouserFreightInr = 20 * (liveRate > 0 ? liveRate * 1.02 : 1);
+  const vendorFreightInr = 1200;
+  const vendorFreightSelected = $("vendorFreight")?.value === "yes";
   const freightTotal = complete && (mouser
-    ? mouserFreightApplicable
-    : totalInvoice < Number(section.dataset.freeShippingThreshold))
-    ? (mouser ? Math.round((mouserFreightInr + Number.EPSILON) * 100) / 100 : Number(section.dataset.internationalFreight))
+    ? mouserFreightApplicable && vendorFreightSelected
+    : totalInvoice < Number(section.dataset.freeShippingThreshold) && vendorFreightSelected)
+    ? (mouser ? Math.round((vendorFreightInr + Number.EPSILON) * 100) / 100 : Number(section.dataset.internationalFreight))
     : 0;
   const weights = totalInvoice > 0
     ? validInvoices
@@ -1169,6 +1172,7 @@ async function calculate() {
           : {})
       })),
       remittance_applicable: $("remittance").value,
+      mouser_freight_applicable: $("vendorFreight")?.value === "yes",
       cha_applicable: $("cha").value,
       domestic_trucking_applicable: $("domestic").value,
       other_charges_total: $("otherChargesTotal").value,
@@ -1215,10 +1219,16 @@ $("addLine").addEventListener("click", () => {
   renderLines();
 });
 $("invoiceCurrency").addEventListener("change", updatePriceSettings);
+$("vendorFreight").addEventListener("change", () => {
+  updateAssessableSummary();
+  updateTariffAmounts();
+});
 $("vendor").addEventListener("change", () => {
   const isMouser = $("vendor").value === "mouser";
   $("invoiceCurrency").disabled = false;
   $("vendorNotice").classList.toggle("hidden", !isMouser);
+  $("vendorFreightWrap").classList.remove("hidden");
+  $("vendorFreight").closest("label").firstChild.textContent = `Add ${isMouser ? "Mouser" : "DigiKey"} freight (INR \u20b91,200)?`;
   state.lines.forEach((line) => {
     const previousPriceSource = line.priceSource;
     line.result = null;

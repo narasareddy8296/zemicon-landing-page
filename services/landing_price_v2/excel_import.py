@@ -361,15 +361,17 @@ def read_seed_master(path):
             "bcd": ("basic customs duty (bcd) rate",),
             "sws": ("social welfare surcharge (sws) rate",),
         }
-        for row_number in range(1, worksheet.max_row + 1):
-            label = worksheet.cell(row=row_number, column=1).value
+        for row_number, (label,) in enumerate(
+            worksheet.iter_rows(min_col=1, max_col=1, values_only=True),
+            1,
+        ):
             normalized = normalize_header(label)
             for field, phrases in label_fields.items():
                 if any(normalize_header(phrase) in normalized for phrase in phrases):
                     field_rows[field] = row_number
         if set(field_rows) != set(label_fields):
             raise ValueError("DigiKey master workbook is missing MPN, category, HSN, BCD, or SWS fields.")
-        rows = []
+        candidates = []
         row_values = {}
         for field, row_number in field_rows.items():
             row_values[field] = next(
@@ -380,7 +382,6 @@ def read_seed_master(path):
                     values_only=True,
                 )
             )
-        rows = []
         for offset in range(max(map(len, row_values.values()))):
             record = {
                 field: values[offset] if offset < len(values) else None
@@ -388,8 +389,24 @@ def read_seed_master(path):
             }
             if not record["mpn"]:
                 continue
-            if not all(record.get(field) not in (None, "") for field in ("category", "hsn", "bcd", "sws")):
+            if not all(record.get(field) not in (None, "") for field in ("category", "hsn")):
                 continue
+            candidates.append(record)
+
+        rates_by_hsn = {}
+        for record in candidates:
+            if record.get("bcd") in (None, "") or record.get("sws") in (None, ""):
+                continue
+            hsn = str(record["hsn"]).strip()
+            rates_by_hsn.setdefault(hsn, set()).add((record["bcd"], record["sws"]))
+
+        rows = []
+        for record in candidates:
+            if record.get("bcd") in (None, "") or record.get("sws") in (None, ""):
+                matching_rates = rates_by_hsn.get(str(record["hsn"]).strip(), set())
+                if len(matching_rates) != 1:
+                    continue
+                record["bcd"], record["sws"] = next(iter(matching_rates))
             rows.append(record)
         if not rows:
             raise ValueError("No complete DigiKey product records were found in the master workbook.")
